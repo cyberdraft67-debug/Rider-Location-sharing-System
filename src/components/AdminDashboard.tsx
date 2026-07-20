@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from "react";
-import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ExternalLink, ShieldCheck, HelpCircle } from "lucide-react";
+import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle } from "lucide-react";
 import { TrackingLink } from "../types";
 
 interface AdminDashboardProps {
@@ -207,38 +207,6 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
               Generate Secure Tracking Link
             </button>
           </form>
-        </div>
-
-        {/* GitHub Integration Info */}
-        <div className="bg-gradient-to-br from-gray-900 to-slate-900 text-white rounded-3xl p-6 shadow-md relative overflow-hidden">
-          <div className="absolute right-0 bottom-0 opacity-10">
-            <svg viewBox="0 0 24 24" width="160" height="160" fill="currentColor">
-              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.11.82-.26.82-.577v-2.234c-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22v3.293c0 .319.22.694.825.576C20.565 21.795 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
-            </svg>
-          </div>
-          
-          <div className="flex items-center gap-2.5 mb-3">
-            <div className="bg-white/10 p-1.5 rounded-lg">
-              <ExternalLink className="w-4 h-4 text-emerald-400" />
-            </div>
-            <h3 className="font-bold text-base font-display">Export to GitHub</h3>
-          </div>
-          
-          <p className="text-gray-300 text-xs leading-relaxed mb-4">
-            Connect your workspace directly to a personal or organizational GitHub repository to instantly sync code:
-          </p>
-          
-          <ol className="text-xs space-y-2.5 text-gray-300 list-decimal pl-4">
-            <li>
-              Click the <strong className="text-white">Settings Icon (⚙️)</strong> in the top menu bar of the Google AI Studio page.
-            </li>
-            <li>
-              Navigate to the <strong className="text-white">GitHub Connection</strong> or export option inside the panel.
-            </li>
-            <li>
-              Authenticate with your GitHub account, pick your target repository, and the system will automatically push all commits there!
-            </li>
-          </ol>
         </div>
       </div>
 

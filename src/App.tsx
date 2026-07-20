@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Navigation, Bike, Compass, Heart } from "lucide-react";
+import { Navigation, Heart } from "lucide-react";
 import AdminDashboard from "./components/AdminDashboard";
 import RiderTracker from "./components/RiderTracker";
 import CustomerViewer from "./components/CustomerViewer";
@@ -56,35 +56,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-between font-sans selection:bg-indigo-100">
       
-      {/* Universal header navigation bar */}
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          
-          <div 
-            onClick={() => navigateTo({ type: "dashboard" })}
-            className="flex items-center gap-2.5 cursor-pointer select-none group"
-          >
-            <div className="bg-indigo-600 text-white p-2 rounded-xl group-hover:bg-indigo-700 transition">
-              <Bike className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-base font-bold text-gray-900 tracking-tight font-display flex items-center gap-1.5">
-                Rider Location Tracker
-              </h1>
-              <p className="text-[10px] text-gray-400 font-medium">Live Delivery Mapping Service</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <span className="hidden sm:flex items-center gap-1.5 text-xs text-gray-500 font-medium font-mono">
-              <Compass className="w-4 h-4 text-gray-400 animate-spin" style={{ animationDuration: '6s' }} />
-              UTC 2026
-            </span>
-          </div>
-
-        </div>
-      </header>
-
       {/* Main active view stage */}
       <main className="flex-1 py-8">
         {view.type === "dashboard" && (
