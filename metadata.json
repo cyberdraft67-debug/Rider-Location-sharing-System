@@ -1,0 +1,10 @@
+{
+  "name": "Rider Location Tracker",
+  "description": "A delivery rider location-sharing system with live mapping, GPS updates, and order progress tracking.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
