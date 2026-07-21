@@ -1,6 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { Play, Square, CheckCircle, Navigation, AlertTriangle, CloudOff, RefreshCw } from "lucide-react";
 import { TrackingLink, LocationUpdate } from "../types";
+import { supabase } from "../supabaseClient";
+
+// Helper to parse any date string safely as UTC if it doesn't specify a timezone offset
+const parseAsUTC = (dateStr: string): Date => {
+  if (!dateStr) return new Date();
+  let formatted = dateStr;
+  if (formatted.includes(" ") && !formatted.includes("T")) {
+    formatted = formatted.replace(" ", "T");
+  }
+  // If it doesn't contain Z or an explicit timezone offset like +08 or -05, append Z to force UTC
+  if (!formatted.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(formatted)) {
+    formatted += "Z";
+  }
+  return new Date(formatted);
+};
 
 interface RiderTrackerProps {
   token: string;
@@ -18,23 +33,50 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
   const [secondsSinceLastUpdate, setSecondsSinceLastUpdate] = useState(0);
 
   const watchIdRef = useRef<number | null>(null);
-  const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch token details
+  // Fetch token details directly from Supabase
   const fetchDetails = async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch(`/api/tracking/${token}`);
-      if (!res.ok) {
-        throw new Error(await res.text() || "Failed to validate tracking link");
+      
+      const { data: link, error: linkError } = await supabase
+        .from("tracking_links")
+        .select("*")
+        .eq("token", token)
+        .single();
+
+      if (linkError || !link) {
+        throw new Error(linkError?.message || "Tracking link not found or invalid");
       }
-      const data = await res.json();
-      setLinkData(data.link);
-      if (data.location) {
-        setCoords({ latitude: data.location.latitude, longitude: data.location.longitude });
+
+      // Check if expired and update on demand (using safe parseAsUTC helper)
+      const now = new Date();
+      if (link.status === "active" && parseAsUTC(link.expires_at).getTime() < now.getTime()) {
+        const { error: updateError } = await supabase
+          .from("tracking_links")
+          .update({ status: "expired" })
+          .eq("id", link.id);
+        
+        if (!updateError) {
+          link.status = "expired";
+        }
+      }
+
+      setLinkData(link);
+
+      // Fetch any existing location update
+      const { data: loc, error: locError } = await supabase
+        .from("location_updates")
+        .select("*")
+        .eq("order_id", link.order_id)
+        .maybeSingle();
+
+      if (loc) {
+        setCoords({ latitude: loc.latitude, longitude: loc.longitude });
       }
     } catch (err: any) {
+      console.error("Failed to fetch tracking details from Supabase:", err);
       setError(err.message || "An unexpected error occurred");
     } finally {
       setLoading(false);
@@ -61,33 +103,37 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     return () => clearInterval(timer);
   }, [isSharing, lastUpdateTime]);
 
-  // Function to send coordinates to backend
+  // Function to send coordinates to Supabase
   const sendLocation = async (lat: number, lng: number) => {
-    if (linkData && linkData.status !== "active") {
+    if (!linkData) return;
+    
+    if (linkData.status !== "active") {
       stopLocationSharing();
       return;
     }
+    
     setUpdateStatus("sending");
     try {
-      const res = await fetch(`/api/tracking/${token}/location`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ latitude: lat, longitude: lng }),
-      });
+      const { error: upsertError } = await supabase
+        .from("location_updates")
+        .upsert({
+          order_id: linkData.order_id,
+          latitude: Number(lat),
+          longitude: Number(lng),
+          updated_at: new Date().toISOString(),
+        });
 
-      if (!res.ok) {
-        throw new Error("HTTP error " + res.status);
-      }
+      if (upsertError) throw upsertError;
 
       setLastUpdateTime(Date.now());
       setUpdateStatus("success");
     } catch (err) {
-      console.error("Failed to send location update", err);
+      console.error("Failed to send location update to Supabase:", err);
       setUpdateStatus("offline");
     }
   };
 
-  // Start reading GPS and sending updates
+  // Start reading GPS and sending updates directly to Supabase
   const startLocationSharing = () => {
     if (!("geolocation" in navigator)) {
       alert("Geolocation is not supported by your browser");
@@ -112,11 +158,12 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
       { enableHighAccuracy: true, timeout: 15000 }
     );
 
-    // Watch position in real-time
+    // Watch position in real-time, sending updates to Supabase whenever it changes
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
         setCoords({ latitude, longitude });
+        sendLocation(latitude, longitude);
       },
       (error) => {
         console.error("GPS Watch error:", error);
@@ -124,38 +171,12 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
       },
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
-
-    // Upsert to backend every 12 seconds to satisfy the 10-15s requirement
-    intervalIdRef.current = setInterval(() => {
-      // Use coordinates state or query current position again to write to backend
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          setCoords({ latitude, longitude });
-          sendLocation(latitude, longitude);
-        },
-        (error) => {
-          console.error("Interval GPS fetch failed:", error);
-          // If watchPosition coordinates are already available, try sending those as fallback
-          if (coords) {
-            sendLocation(coords.latitude, coords.longitude);
-          } else {
-            setUpdateStatus("offline");
-          }
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    }, 12000);
   };
 
   const stopLocationSharing = () => {
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
-    }
-    if (intervalIdRef.current !== null) {
-      clearInterval(intervalIdRef.current);
-      intervalIdRef.current = null;
     }
     setIsSharing(false);
     setUpdateStatus("idle");
@@ -167,18 +188,20 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     }
     stopLocationSharing();
     try {
-      const res = await fetch(`/api/tracking/${token}/complete`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        fetchDetails(); // Reload status
-      } else {
-        alert("Failed to complete order. Please try again.");
-      }
-    } catch (err) {
-      alert("Network error while completing order.");
+      const { error: updateError } = await supabase
+        .from("tracking_links")
+        .update({ status: "delivered" })
+        .eq("id", linkData!.id);
+
+      if (updateError) throw updateError;
+      
+      await fetchDetails(); // Reload status
+    } catch (err: any) {
+      console.error("Failed to mark delivery as complete in Supabase:", err);
+      alert("Failed to complete order. Please try again.");
     }
   };
+
 
   if (loading) {
     return (

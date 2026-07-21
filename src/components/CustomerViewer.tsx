@@ -2,6 +2,21 @@ import { useState, useEffect } from "react";
 import { CheckCircle, AlertTriangle, RefreshCw, Clock, MapPin, Navigation, Signal } from "lucide-react";
 import { TrackingLink, LocationUpdate } from "../types";
 import MapComponent from "./MapComponent";
+import { supabase } from "../supabaseClient";
+
+// Helper to parse any date string safely as UTC if it doesn't specify a timezone offset
+const parseAsUTC = (dateStr: string): Date => {
+  if (!dateStr) return new Date();
+  let formatted = dateStr;
+  if (formatted.includes(" ") && !formatted.includes("T")) {
+    formatted = formatted.replace(" ", "T");
+  }
+  // If it doesn't contain Z or an explicit timezone offset like +08 or -05, append Z to force UTC
+  if (!formatted.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(formatted)) {
+    formatted += "Z";
+  }
+  return new Date(formatted);
+};
 
 interface CustomerViewerProps {
   token: string;
@@ -16,17 +31,45 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
   const [secondsSinceUpdate, setSecondsSinceUpdate] = useState<number | null>(null);
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "offline">("connecting");
 
-  // Fetch token details initially
+  // Fetch token details initially from Supabase
   const fetchDetails = async () => {
     try {
       setError(null);
-      const res = await fetch(`/api/tracking/${token}`);
-      if (!res.ok) {
-        throw new Error(await res.text() || "Failed to validate tracking link");
+      
+      const { data: link, error: linkError } = await supabase
+        .from("tracking_links")
+        .select("*")
+        .eq("token", token)
+        .single();
+
+      if (linkError || !link) {
+        throw new Error(linkError?.message || "Failed to find tracking link");
       }
-      const data = await res.json();
-      setLinkData(data.link);
-      setLocation(data.location);
+
+      // Check if expired and update status on demand
+      const now = new Date();
+      if (link.status === "active" && parseAsUTC(link.expires_at).getTime() < now.getTime()) {
+        const { error: updateError } = await supabase
+          .from("tracking_links")
+          .update({ status: "expired" })
+          .eq("id", link.id);
+        
+        if (!updateError) {
+          link.status = "expired";
+        }
+      }
+
+      setLinkData(link);
+
+      const { data: loc, error: locError } = await supabase
+        .from("location_updates")
+        .select("*")
+        .eq("order_id", link.order_id)
+        .maybeSingle();
+
+      if (loc) {
+        setLocation(loc);
+      }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred");
     } finally {
@@ -38,46 +81,57 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
     fetchDetails();
   }, [token]);
 
-  // Real-time EventSource (SSE) Subscription - simulating Supabase Realtime
+  // Real-time Supabase Subscription
   useEffect(() => {
     if (loading || error || !linkData || linkData.status !== "active") return;
 
     setConnectionState("connecting");
-    const eventSource = new EventSource(`/api/tracking/${token}/stream`);
 
-    eventSource.onopen = () => {
-      setConnectionState("live");
-    };
-
-    eventSource.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload.type === "init") {
-          if (payload.status) {
-            setLinkData(prev => prev ? { ...prev, status: payload.status } : null);
+    // Subscribe to postgres_changes on location_updates table for this specific order_id
+    const channel = supabase
+      .channel(`location-updates-${linkData.order_id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // Listen to INSERT, UPDATE, or ALL
+          schema: "public",
+          table: "location_updates",
+          filter: `order_id=eq.${linkData.order_id}`,
+        },
+        (payload) => {
+          console.log("Realtime location update received:", payload);
+          if (payload.new) {
+            setLocation(payload.new as LocationUpdate);
           }
-          if (payload.location) {
-            setLocation(payload.location);
-          }
-        } else if (payload.type === "location_update") {
-          setLocation(payload.location);
-        } else if (payload.type === "status_change") {
-          setLinkData(prev => prev ? { ...prev, status: payload.status } : null);
         }
-      } catch (err) {
-        console.error("Error parsing Realtime SSE data:", err);
-      }
-    };
-
-    eventSource.onerror = (err) => {
-      console.error("SSE Connection error:", err);
-      setConnectionState("offline");
-    };
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "tracking_links",
+          filter: `id=eq.${linkData.id}`,
+        },
+        (payload) => {
+          console.log("Realtime tracking link status update received:", payload);
+          if (payload.new) {
+            setLinkData(payload.new as TrackingLink);
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setConnectionState("live");
+        } else if (status === "CLOSED" || status === "TIMED_OUT") {
+          setConnectionState("offline");
+        }
+      });
 
     return () => {
-      eventSource.close();
+      supabase.removeChannel(channel);
     };
-  }, [loading, token, linkData?.status]);
+  }, [loading, token, linkData?.order_id, linkData?.id, linkData?.status]);
 
   // Handle ticking timer for "Last updated X seconds/minutes ago"
   useEffect(() => {
@@ -101,16 +155,17 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
       return;
     }
     try {
-      const res = await fetch(`/api/tracking/${token}/complete`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        fetchDetails(); // Reload state
-      } else {
-        alert("Failed to confirm delivery. Please try again.");
-      }
-    } catch (err) {
-      alert("Network error. Please check your connection.");
+      const { error: updateError } = await supabase
+        .from("tracking_links")
+        .update({ status: "delivered" })
+        .eq("id", linkData!.id);
+
+      if (updateError) throw updateError;
+      
+      await fetchDetails(); // Reload state
+    } catch (err: any) {
+      console.error("Failed to mark delivery as delivered from customer view:", err);
+      alert("Failed to confirm delivery. Please try again.");
     }
   };
 

@@ -1,11 +1,26 @@
 import { useState, useEffect, FormEvent } from "react";
 import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle } from "lucide-react";
 import { TrackingLink } from "../types";
+import { supabase } from "../supabaseClient";
 
 interface AdminDashboardProps {
   onSelectRider: (token: string) => void;
   onSelectCustomer: (token: string) => void;
 }
+
+// Helper to parse any date string safely as UTC if it doesn't specify a timezone offset
+const parseAsUTC = (dateStr: string): Date => {
+  if (!dateStr) return new Date();
+  let formatted = dateStr;
+  if (formatted.includes(" ") && !formatted.includes("T")) {
+    formatted = formatted.replace(" ", "T");
+  }
+  // If it doesn't contain Z or an explicit timezone offset like +08 or -05, append Z to force UTC
+  if (!formatted.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(formatted)) {
+    formatted += "Z";
+  }
+  return new Date(formatted);
+};
 
 export default function AdminDashboard({ onSelectRider, onSelectCustomer }: AdminDashboardProps) {
   const [orders, setOrders] = useState<TrackingLink[]>([]);
@@ -38,17 +53,63 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
     { lat: 1.309000, lng: 103.832000 }, // End
   ];
 
-  // Fetch all orders/links
+  // Fetch all orders/links directly from Supabase
   const fetchOrders = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/orders");
-      if (res.ok) {
-        const data = await res.json();
-        setOrders(data);
+      
+      // Fetch tracking links ordered by created_at descending
+      const { data: links, error: linksError } = await supabase
+        .from("tracking_links")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (linksError) throw linksError;
+
+      if (links) {
+        const now = new Date();
+        // Client-side auto-expiry background check & DB sync (with timezone safety)
+        const expiredLinks = links.filter((link) => {
+          if (link.status !== "active") return false;
+          const expiryTime = parseAsUTC(link.expires_at);
+          const isExpired = expiryTime.getTime() < now.getTime();
+          console.log(`[Order Expiry Check] ID: ${link.order_id} | Raw Expires At: ${link.expires_at} | Parsed Expiry (UTC): ${expiryTime.toISOString()} | Current Client (UTC): ${now.toISOString()} | Is Expired?: ${isExpired}`);
+          return isExpired;
+        });
+
+        if (expiredLinks.length > 0) {
+          await Promise.all(
+            expiredLinks.map(async (link) => {
+              await supabase
+                .from("tracking_links")
+                .update({ status: "expired" })
+                .eq("id", link.id);
+              link.status = "expired";
+            })
+          );
+        }
+
+        // Fetch location updates to map against order_id
+        const { data: locations, error: locationsError } = await supabase
+          .from("location_updates")
+          .select("*");
+
+        if (locationsError) {
+          console.error("Failed to fetch location updates from Supabase", locationsError);
+        }
+
+        const enriched = links.map((link) => {
+          const loc = locations?.find((l) => l.order_id === link.order_id) || null;
+          return {
+            ...link,
+            location: loc,
+          };
+        });
+
+        setOrders(enriched);
       }
     } catch (err) {
-      console.error("Failed to fetch orders", err);
+      console.error("Failed to fetch orders from Supabase:", err);
     } finally {
       setLoading(false);
     }
@@ -56,9 +117,24 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
 
   useEffect(() => {
     fetchOrders();
+    // Set an interval to run the client-side check for expired active links
+    const interval = setInterval(() => {
+      fetchOrders();
+    }, 15000);
+    return () => clearInterval(interval);
   }, []);
 
-  // Handle auto simulation triggers
+  // Helper to generate a random 32-char hex token if needed
+  const generateRandomToken = (): string => {
+    const chars = "abcdef0123456789";
+    let token = "";
+    for (let i = 0; i < 32; i++) {
+      token += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return token;
+  };
+
+  // Handle auto simulation triggers directly on Supabase
   useEffect(() => {
     if (!simulatingToken) return;
 
@@ -67,25 +143,36 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
       setSimulationCoordsIdx(nextIdx);
       const coord = SIMULATION_ROUTE[nextIdx];
 
+      const targetOrder = orders.find((o) => o.token === simulatingToken);
+      if (!targetOrder) return;
+
+      // Status lock: stop simulation updates if complete/expired
+      if (targetOrder.status !== "active") {
+        setSimulatingToken(null);
+        return;
+      }
+
       try {
-        await fetch(`/api/tracking/${simulatingToken}/location`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ latitude: coord.lat, longitude: coord.lng }),
-        });
-        // Reload local list
-        const res = await fetch("/api/orders");
-        if (res.ok) {
-          const data = await res.json();
-          setOrders(data);
-        }
+        const { error } = await supabase
+          .from("location_updates")
+          .upsert({
+            order_id: targetOrder.order_id,
+            latitude: coord.lat,
+            longitude: coord.lng,
+            updated_at: new Date().toISOString(),
+          });
+
+        if (error) throw error;
+
+        // Fetch and refresh the active order tracking list
+        fetchOrders();
       } catch (err) {
-        console.error("Simulation error", err);
+        console.error("Supabase simulation update error:", err);
       }
     }, 4000); // Send updates every 4 seconds for immediate visual feedback!
 
     return () => clearInterval(interval);
-  }, [simulatingToken, simulationCoordsIdx]);
+  }, [simulatingToken, simulationCoordsIdx, orders]);
 
   const handleCreateOrder = async (e: FormEvent) => {
     e.preventDefault();
@@ -98,34 +185,41 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
 
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          order_id: orderId,
-          rider_id: riderId,
-          customer_id: customerId,
-          address: address,
-        }),
-      });
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 3 * 60 * 60 * 1000); // 3 hours from creation
+      const token = generateRandomToken();
 
-      if (res.ok) {
-        setOrderId("");
-        setRiderId("");
-        setCustomerId("");
-        setAddress("");
-        fetchOrders();
-        setActiveTab("links");
-      } else {
-        const txt = await res.text();
-        setFormError(txt || "Failed to create tracking link");
+      const { error } = await supabase
+        .from("tracking_links")
+        .insert({
+          order_id: orderId.trim(),
+          rider_id: riderId.trim(),
+          customer_id: customerId.trim(),
+          address: address.trim(),
+          token: token,
+          status: "active",
+          created_at: now.toISOString(),
+          expires_at: expiresAt.toISOString(),
+        });
+
+      if (error) {
+        throw error;
       }
-    } catch (err) {
-      setFormError("Network error. Could not reach local Express backend.");
+
+      setOrderId("");
+      setRiderId("");
+      setCustomerId("");
+      setAddress("");
+      await fetchOrders();
+      setActiveTab("links");
+    } catch (err: any) {
+      console.error("Failed to insert tracking link:", err);
+      setFormError(err.message || "Failed to create tracking link in Supabase");
     } finally {
       setIsSubmitting(false);
     }
   };
+
 
   const startSimulation = (token: string) => {
     setSimulatingToken(token);
@@ -368,9 +462,31 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                       </button>
                     </div>
 
-                    {/* Token path info text */}
-                    <div className="mt-2 text-[10px] font-mono text-gray-400/80 truncate px-1">
-                      Secure Token: {link.token}
+                     {/* Token path info text */}
+                    <div className="mt-2 text-[10px] font-mono text-gray-400/80 truncate px-1 flex justify-between items-center">
+                      <span>Secure Token: {link.token}</span>
+                    </div>
+
+                    {/* Expiry Debug & Diagnostics */}
+                    <div className="mt-2.5 pt-2 border-t border-dashed border-gray-100 text-[10px] text-gray-500 bg-gray-50/50 p-2.5 rounded-xl space-y-1">
+                      <div className="font-bold text-[10px] text-indigo-600 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-indigo-500" /> Timezone Diagnostics
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 font-mono text-[9px]">
+                        <div><span className="font-semibold text-gray-700">Expires At (DB raw):</span></div>
+                        <div className="text-right text-gray-800 break-all">{link.expires_at}</div>
+
+                        <div><span className="font-semibold text-gray-700">Parsed Expiry (UTC):</span></div>
+                        <div className="text-right text-gray-800">{parseAsUTC(link.expires_at).toISOString()}</div>
+
+                        <div><span className="font-semibold text-gray-700">Current Client (UTC):</span></div>
+                        <div className="text-right text-gray-800">{new Date().toISOString()}</div>
+
+                        <div><span className="font-semibold text-gray-700">Remaining Time:</span></div>
+                        <div className="text-right font-bold text-indigo-600">
+                          {Math.round((parseAsUTC(link.expires_at).getTime() - Date.now()) / (60 * 1000))} mins
+                        </div>
+                      </div>
                     </div>
                   </div>
                 );
