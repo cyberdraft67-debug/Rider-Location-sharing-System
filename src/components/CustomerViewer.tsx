@@ -86,6 +86,7 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
     if (loading || error || !linkData || linkData.status !== "active") return;
 
     setConnectionState("connecting");
+    console.log(`[Realtime] Attempting to subscribe to channels for order_id: ${linkData.order_id}, link_id: ${linkData.id}`);
 
     // Subscribe to postgres_changes on location_updates table for this specific order_id
     const channel = supabase
@@ -99,9 +100,11 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
           filter: `order_id=eq.${linkData.order_id}`,
         },
         (payload) => {
-          console.log("Realtime location update received:", payload);
+          console.log("[Realtime] Location update payload received:", payload);
           if (payload.new) {
-            setLocation(payload.new as LocationUpdate);
+            const updatedLoc = payload.new as LocationUpdate;
+            console.log(`[Realtime] New location applied: lat=${updatedLoc.latitude}, lng=${updatedLoc.longitude}, updated_at=${updatedLoc.updated_at}`);
+            setLocation(updatedLoc);
           }
         }
       )
@@ -114,31 +117,87 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
           filter: `id=eq.${linkData.id}`,
         },
         (payload) => {
-          console.log("Realtime tracking link status update received:", payload);
+          console.log("[Realtime] Tracking link status update payload received:", payload);
           if (payload.new) {
-            setLinkData(payload.new as TrackingLink);
+            const updatedLink = payload.new as TrackingLink;
+            console.log(`[Realtime] Tracking link status changed: status=${updatedLink.status}`);
+            setLinkData(updatedLink);
           }
         }
       )
-      .subscribe((status) => {
+      .subscribe((status, err) => {
+        console.log(`[Realtime] Subscription status for order ${linkData.order_id}:`, status);
+        if (err) {
+          console.error(`[Realtime] Subscription error for order ${linkData.order_id}:`, err);
+        }
         if (status === "SUBSCRIBED") {
+          console.log(`[Realtime] Channel connected successfully and listening for order ${linkData.order_id}`);
           setConnectionState("live");
         } else if (status === "CLOSED" || status === "TIMED_OUT") {
+          console.warn(`[Realtime] Channel closed or timed out: ${status}`);
           setConnectionState("offline");
         }
       });
 
     return () => {
+      console.log(`[Realtime] Cleaning up subscription channel for order ${linkData.order_id}`);
       supabase.removeChannel(channel);
     };
   }, [loading, token, linkData?.order_id, linkData?.id, linkData?.status]);
+
+  // Fallback Polling Effect: Pull latest data every 6 seconds as a robust fallback
+  useEffect(() => {
+    if (loading || error || !linkData || linkData.status !== "active") return;
+
+    const pollFallback = async () => {
+      try {
+        console.log(`[Fallback Polling] Fetching latest location & status for order ${linkData.order_id}...`);
+        
+        // 1. Fetch location update
+        const { data: loc, error: locError } = await supabase
+          .from("location_updates")
+          .select("*")
+          .eq("order_id", linkData.order_id)
+          .maybeSingle();
+
+        if (locError) {
+          console.error("[Fallback Polling] Error fetching location:", locError);
+        } else if (loc) {
+          // Only update state if the data is actually newer or currently null
+          if (!location || parseAsUTC(loc.updated_at).getTime() > parseAsUTC(location.updated_at).getTime()) {
+            console.log(`[Fallback Polling] Found fresher location data: lat=${loc.latitude}, lng=${loc.longitude}, updated_at=${loc.updated_at}`);
+            setLocation(loc);
+          }
+        }
+
+        // 2. Fetch tracking link status
+        const { data: link, error: linkError } = await supabase
+          .from("tracking_links")
+          .select("*")
+          .eq("id", linkData.id)
+          .single();
+
+        if (linkError) {
+          console.error("[Fallback Polling] Error fetching tracking link:", linkError);
+        } else if (link && link.status !== linkData.status) {
+          console.log(`[Fallback Polling] Found status update: ${linkData.status} -> ${link.status}`);
+          setLinkData(link);
+        }
+      } catch (pollErr) {
+        console.error("[Fallback Polling] Unexpected error:", pollErr);
+      }
+    };
+
+    const interval = setInterval(pollFallback, 6000);
+    return () => clearInterval(interval);
+  }, [loading, error, linkData, location]);
 
   // Handle ticking timer for "Last updated X seconds/minutes ago"
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (location?.updated_at) {
       const updateTimer = () => {
-        const updatedTime = new Date(location.updated_at).getTime();
+        const updatedTime = parseAsUTC(location.updated_at).getTime();
         const diffSeconds = Math.max(0, Math.floor((Date.now() - updatedTime) / 1000));
         setSecondsSinceUpdate(diffSeconds);
       };
