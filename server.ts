@@ -312,14 +312,29 @@ async function startServer() {
   });
 
   // Vite Integration for dev or production
-  if (process.env.NODE_ENV !== "production") {
+  const distPath = path.join(process.cwd(), "dist");
+  const isProd = process.env.NODE_ENV === "production" || fs.existsSync(path.join(distPath, "index.html"));
+
+  if (!isProd) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
+
+    // Fallback for SPA routing in development mode (using Vite transforms)
+    app.get("*", async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        const templatePath = path.resolve(process.cwd(), "index.html");
+        let template = fs.readFileSync(templatePath, "utf-8");
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ "Content-Type": "text/html" }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
-    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
