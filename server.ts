@@ -9,6 +9,7 @@ interface TrackingLink {
   order_id: string;
   rider_id: string;
   customer_id: string;
+  address: string;
   status: 'active' | 'delivered' | 'expired';
   created_at: string;
   expires_at: string;
@@ -48,6 +49,7 @@ function loadDB(): DatabaseSchema {
       order_id: "ORD-9843",
       rider_id: "Rider-John",
       customer_id: "Cust-Sarah",
+      address: "10 Marina Boulevard, Marina Bay, Singapore 018983",
       status: "active",
       created_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString(), // 3 hours from now
@@ -58,6 +60,7 @@ function loadDB(): DatabaseSchema {
       order_id: "ORD-4512",
       rider_id: "Rider-Mike",
       customer_id: "Cust-Alice",
+      address: "21 Orchard Road, Singapore 238888",
       status: "delivered",
       created_at: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
       expires_at: new Date(now.getTime() + 1 * 60 * 60 * 1000).toISOString(),
@@ -143,8 +146,8 @@ async function startServer() {
 
   // API 1: Create tracking link
   app.post("/api/orders", (req, res) => {
-    const { order_id, rider_id, customer_id } = req.body;
-    if (!order_id || !rider_id || !customer_id) {
+    const { order_id, rider_id, customer_id, address } = req.body;
+    if (!order_id || !rider_id || !customer_id || !address) {
        res.status(400).json({ error: "Missing required fields" });
        return;
     }
@@ -158,6 +161,7 @@ async function startServer() {
       order_id: String(order_id).trim(),
       rider_id: String(rider_id).trim(),
       customer_id: String(customer_id).trim(),
+      address: String(address).trim(),
       status: "active",
       created_at: now.toISOString(),
       expires_at: expires_at.toISOString(),

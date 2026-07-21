@@ -63,6 +63,10 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
 
   // Function to send coordinates to backend
   const sendLocation = async (lat: number, lng: number) => {
+    if (linkData && linkData.status !== "active") {
+      stopLocationSharing();
+      return;
+    }
     setUpdateStatus("sending");
     try {
       const res = await fetch(`/api/tracking/${token}/location`, {
@@ -158,7 +162,7 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
   };
 
   const handleMarkComplete = async () => {
-    if (!confirm("Are you sure you want to mark this delivery as complete? Location sharing will stop.")) {
+    if (!confirm("Are you sure you want to end location sharing?")) {
       return;
     }
     stopLocationSharing();
@@ -221,6 +225,11 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
         <div className="mt-2 flex flex-col gap-1 text-sm text-gray-600">
           <div><span className="font-semibold text-gray-700">Rider:</span> {linkData.rider_id}</div>
           <div><span className="font-semibold text-gray-700">Customer:</span> {linkData.customer_id}</div>
+          {linkData.address && (
+            <div className="text-xs text-indigo-700 font-medium mt-1 bg-white/60 px-2 py-1.5 rounded-lg border border-indigo-100/40">
+              <span className="font-bold">📍 Destination:</span> {linkData.address}
+            </div>
+          )}
         </div>
       </div>
 

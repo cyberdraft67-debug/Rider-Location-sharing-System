@@ -163,6 +163,12 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
           </span>
           <h2 className="text-2xl font-bold text-gray-900 font-display mt-2">Order {linkData.order_id}</h2>
           <p className="text-xs text-gray-500 mt-1">Delivery Rider: <span className="font-semibold text-gray-700">{linkData.rider_id}</span></p>
+          {linkData.address && (
+            <p className="text-xs text-indigo-600 font-medium mt-1.5 flex items-start gap-1">
+              <span className="font-bold shrink-0">To:</span>
+              <span>{linkData.address}</span>
+            </p>
+          )}
         </div>
         <button onClick={onGoBack} className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold underline shrink-0">
           Dashboard
@@ -174,7 +180,7 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
         <div className="p-8 text-center bg-emerald-50/20">
           <CheckCircle className={`w-16 h-16 mx-auto mb-4 ${isDelivered ? "text-emerald-500" : "text-amber-500"}`} />
           <h3 className="text-xl font-bold text-gray-800 mb-2">
-            {isDelivered ? "Delivery Arrived!" : "Delivery Link Expired"}
+            {isDelivered ? "This delivery is complete." : "Delivery Link Expired"}
           </h3>
           <p className="text-gray-500 text-sm max-w-xs mx-auto mb-6">
             {isDelivered 

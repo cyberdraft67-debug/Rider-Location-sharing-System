@@ -16,6 +16,7 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
   const [orderId, setOrderId] = useState("");
   const [riderId, setRiderId] = useState("");
   const [customerId, setCustomerId] = useState("");
+  const [address, setAddress] = useState("");
   const [formError, setFormError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -90,7 +91,7 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
     e.preventDefault();
     setFormError("");
 
-    if (!orderId || !riderId || !customerId) {
+    if (!orderId || !riderId || !customerId || !address) {
       setFormError("All fields are required");
       return;
     }
@@ -104,6 +105,7 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
           order_id: orderId,
           rider_id: riderId,
           customer_id: customerId,
+          address: address,
         }),
       });
 
@@ -111,6 +113,7 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
         setOrderId("");
         setRiderId("");
         setCustomerId("");
+        setAddress("");
         fetchOrders();
         setActiveTab("links");
       } else {
@@ -216,6 +219,19 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5">
+                  Delivery Address
+                </label>
+                <input
+                  type="text"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="e.g. 10 Bayfront Ave, Singapore 018956"
+                  className="w-full bg-gray-50 border border-gray-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-4 py-2.5 text-sm transition"
+                />
+              </div>
+
               {formError && (
                 <p className="text-xs text-rose-600 font-medium bg-rose-50 p-2.5 rounded-lg border border-rose-100">
                   {formError}
@@ -293,7 +309,12 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                             {link.status}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1 text-[11px] text-gray-500">
+                        {link.address && (
+                          <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                            <span className="font-semibold text-indigo-600">To:</span> {link.address}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1.5 text-[11px] text-gray-500">
                           <span className="flex items-center gap-1">
                             <User className="w-3 h-3 text-gray-400" /> Rider: {link.rider_id}
                           </span>

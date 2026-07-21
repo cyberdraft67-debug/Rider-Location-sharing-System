@@ -11,6 +11,7 @@ export interface TrackingLink {
   order_id: string;
   rider_id: string;
   customer_id: string;
+  address: string;
   status: 'active' | 'delivered' | 'expired';
   created_at: string;
   expires_at: string;
