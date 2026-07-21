@@ -5,13 +5,52 @@ import { LocationUpdate } from "../types";
 interface MapComponentProps {
   location: LocationUpdate | null;
   status: "active" | "delivered" | "expired";
+  destinationAddress?: string;
 }
 
-export default function MapComponent({ location, status }: MapComponentProps) {
+// Haversine formula to compute distance in meters
+function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // Earth radius in meters
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+// Calculate bearing/heading between two coordinates in degrees (0 = North)
+function getBearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const lat1Rad = (lat1 * Math.PI) / 180;
+  const lat2Rad = (lat2 * Math.PI) / 180;
+
+  const y = Math.sin(dLon) * Math.cos(lat2Rad);
+  const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+            Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+
+  let brng = Math.atan2(y, x);
+  brng = (brng * 180) / Math.PI;
+  return (brng + 360) % 360;
+}
+
+export default function MapComponent({ location, status, destinationAddress }: MapComponentProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const riderMarkerRef = useRef<L.Marker | null>(null);
+  const destinationMarkerRef = useRef<L.Marker | null>(null);
+  const routePolylineRef = useRef<L.Polyline | null>(null);
+  const routePolylineGlowRef = useRef<L.Polyline | null>(null);
+
   const currentCoordsRef = useRef<[number, number] | null>(null);
+  const destinationCoordsRef = useRef<[number, number] | null>(null);
+  const headingRef = useRef<number>(0);
+  const hasFittedBoundsRef = useRef<boolean>(false);
   const animationFrameRef = useRef<number | null>(null);
 
   // Initialize Map
@@ -45,6 +84,145 @@ export default function MapComponent({ location, status }: MapComponentProps) {
     };
   }, []);
 
+  // Fetch Destination Coordinates (Nominatim Geocoder)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !destinationAddress) return;
+
+    const geocode = async () => {
+      try {
+        console.log(`[Geocoding] Querying Nominatim for address: "${destinationAddress}"`);
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1`
+        );
+        const data = await response.json();
+        
+        let destLat = 0;
+        let destLng = 0;
+
+        if (data && data.length > 0) {
+          destLat = parseFloat(data[0].lat);
+          destLng = parseFloat(data[0].lon);
+          console.log(`[Geocoding] Success: Resolved "${destinationAddress}" to [${destLat}, ${destLng}]`);
+        } else {
+          // If geocoding yields no results, place destination at a slight offset from starting coords
+          const startLat = location?.latitude ?? 1.29027;
+          const startLng = location?.longitude ?? 103.851959;
+          destLat = startLat + 0.008;
+          destLng = startLng + 0.008;
+          console.warn(`[Geocoding] No results found for "${destinationAddress}". Using default offset fallback: [${destLat}, ${destLng}]`);
+        }
+
+        destinationCoordsRef.current = [destLat, destLng];
+
+        // Custom Crimson Destination Pin Icon
+        const destIcon = L.divIcon({
+          className: "custom-dest-icon",
+          html: `
+            <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px;">
+              <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(244, 63, 94, 0.2); animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;"></div>
+              <div style="position: relative; width: 28px; height: 28px; border-radius: 9999px; background-color: #f43f5e; border: 2px solid #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                  <circle cx="12" cy="10" r="3"/>
+                </svg>
+              </div>
+            </div>
+          `,
+          iconSize: [42, 42],
+          iconAnchor: [21, 21],
+        });
+
+        // Add or move destination marker
+        if (destinationMarkerRef.current) {
+          destinationMarkerRef.current.setLatLng([destLat, destLng]);
+        } else {
+          destinationMarkerRef.current = L.marker([destLat, destLng], { icon: destIcon })
+            .addTo(map)
+            .bindPopup(`<b>Destination</b><br/>${destinationAddress}`);
+        }
+
+        // Trigger map bounds fitting if we have both coordinates
+        fitMapBounds();
+      } catch (err) {
+        console.error("[Geocoding] Error resolving address:", err);
+      }
+    };
+
+    geocode();
+  }, [destinationAddress]);
+
+  // Fit bounds to show both rider and destination
+  const fitMapBounds = () => {
+    const map = mapRef.current;
+    if (!map || hasFittedBoundsRef.current) return;
+
+    const riderCoords = currentCoordsRef.current;
+    const destCoords = destinationCoordsRef.current;
+
+    if (riderCoords && destCoords) {
+      const bounds = L.latLngBounds([riderCoords, destCoords]);
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+      hasFittedBoundsRef.current = true;
+    }
+  };
+
+  // Fetch actual OSRM road path from Rider to Destination and draw/update line
+  const updateRouteLine = async (riderLat: number, riderLng: number) => {
+    const map = mapRef.current;
+    const dest = destinationCoordsRef.current;
+    if (!map || !dest) return;
+
+    const [destLat, destLng] = dest;
+    let routeCoords: [number, number][] = [
+      [riderLat, riderLng],
+      [destLat, destLng],
+    ];
+
+    try {
+      // Call public free OSRM (Open Source Routing Machine) API for real street route geometry
+      const url = `https://router.project-osrm.org/route/v1/driving/${riderLng},${riderLat};${destLng},${destLat}?overview=full&geometries=geojson`;
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.routes && data.routes.length > 0) {
+          const rawCoords = data.routes[0].geometry.coordinates;
+          // OSRM coordinates are [lng, lat], convert to [lat, lng] for Leaflet
+          routeCoords = rawCoords.map((coord: [number, number]) => [coord[1], coord[0]]);
+        }
+      }
+    } catch (err) {
+      console.warn("[Route Line] OSRM route fetch failed, drawing straight line instead:", err);
+    }
+
+    // Draw main colored street polyline path
+    if (routePolylineRef.current) {
+      routePolylineRef.current.setLatLngs(routeCoords);
+    } else {
+      routePolylineRef.current = L.polyline(routeCoords, {
+        color: "#4f46e5", // Elegant Indigo Blue line
+        weight: 6,
+        opacity: 0.8,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(map);
+    }
+
+    // Draw secondary transparent soft outer glow polyline path below it
+    if (routePolylineGlowRef.current) {
+      routePolylineGlowRef.current.setLatLngs(routeCoords);
+    } else {
+      routePolylineGlowRef.current = L.polyline(routeCoords, {
+        color: "#4f46e5",
+        weight: 12,
+        opacity: 0.15,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(map);
+    }
+  };
+
   // Handle location changes and marker interpolation
   useEffect(() => {
     const map = mapRef.current;
@@ -53,19 +231,28 @@ export default function MapComponent({ location, status }: MapComponentProps) {
     const targetLat = location.latitude;
     const targetLng = location.longitude;
 
-    // Define a beautiful glowing/pulsing custom div icon for the Rider
+    // Check if we already have current coordinates
+    const startLat = currentCoordsRef.current?.[0] ?? targetLat;
+    const startLng = currentCoordsRef.current?.[1] ?? targetLng;
+
+    // Calculate heading/bearing based on movement if distance is notable (> 2m)
+    const movementDistance = getHaversineDistance(startLat, startLng, targetLat, targetLng);
+    if (movementDistance > 2) {
+      headingRef.current = getBearing(startLat, startLng, targetLat, targetLng);
+    }
+
+    // Define a beautiful rotating Navigation Arrow custom div icon
     const riderIcon = L.divIcon({
       className: "custom-rider-icon",
       html: `
-        <div class="relative flex items-center justify-center" style="width: 40px; height: 40px;">
-          <div class="absolute w-8 h-8 rounded-full bg-indigo-500/30 animate-ping"></div>
-          <div class="relative w-6 h-6 rounded-full bg-indigo-600 border-2 border-white shadow-lg flex items-center justify-center">
-            <!-- Scooter / Delivery Bag SVG icon -->
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-truck">
-              <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/>
-              <path d="M19 18h2a1 1 0 0 0 1-1v-5.14a1 1 0 0 0-.293-.707l-4-4A1 1 0 0 0 17 7h-3v11"/>
-              <circle cx="7" cy="18" r="2"/>
-              <circle cx="17" cy="18" r="2"/>
+        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px;">
+          <!-- Glowing wave shadow -->
+          <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(79, 70, 229, 0.2); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+          <!-- Arrow container rotating -->
+          <div class="rider-arrow-container" style="transition: transform 0.3s ease-out; transform: rotate(${headingRef.current}deg); width: 28px; height: 28px; border-radius: 9999px; background-color: #4f46e5; border: 2px solid #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center;">
+            <!-- Navigation Arrow SVG rotated -45deg so it points straight North at 0deg -->
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(-45deg);">
+              <polygon points="3 11 22 2 13 21 11 13 3 11"/>
             </svg>
           </div>
         </div>
@@ -79,26 +266,25 @@ export default function MapComponent({ location, status }: MapComponentProps) {
       const marker = L.marker([targetLat, targetLng], { icon: riderIcon }).addTo(map);
       riderMarkerRef.current = marker;
       currentCoordsRef.current = [targetLat, targetLng];
-      map.panTo([targetLat, targetLng]);
+      map.setView([targetLat, targetLng], 15);
+      
+      // Update route line immediately
+      updateRouteLine(targetLat, targetLng);
     } else {
-      // Smooth linear interpolation animation to prevent marker snapping (GPS jitter)
+      // Smooth linear interpolation animation to prevent marker snapping over ~1 second
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
 
-      const startLat = currentCoordsRef.current?.[0] ?? targetLat;
-      const startLng = currentCoordsRef.current?.[1] ?? targetLng;
-      const duration = 1200; // 1.2 seconds animation
+      const duration = 1000; // Exact 1.0 second movement animation
       const startTime = performance.now();
 
       const animateMarker = (nowTime: number) => {
         const elapsed = nowTime - startTime;
         const progress = Math.min(elapsed / duration, 1);
 
-        // Ease in-out quad function for smooth movement transition
-        const ease = progress < 0.5 
-          ? 2 * progress * progress 
-          : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+        // Ease-out Quad function for visual deceleration towards the destination coordinate
+        const ease = progress * (2 - progress);
 
         const currentLat = startLat + (targetLat - startLat) * ease;
         const currentLng = startLng + (targetLng - startLng) * ease;
@@ -106,13 +292,39 @@ export default function MapComponent({ location, status }: MapComponentProps) {
         if (riderMarkerRef.current) {
           riderMarkerRef.current.setLatLng([currentLat, currentLng]);
           currentCoordsRef.current = [currentLat, currentLng];
+
+          // Rotate arrow dynamically using DOM selector for instantaneous response
+          const riderElement = riderMarkerRef.current.getElement()?.querySelector(".rider-arrow-container") as HTMLElement;
+          if (riderElement) {
+            riderElement.style.transform = `rotate(${headingRef.current}deg)`;
+          }
+
+          // Live update route line beginning coordinate so line always flows cleanly from moving rider icon
+          if (routePolylineRef.current) {
+            const currentLatLngs = routePolylineRef.current.getLatLngs() as L.LatLng[];
+            if (currentLatLngs.length > 0) {
+              currentLatLngs[0] = L.latLng(currentLat, currentLng);
+              routePolylineRef.current.setLatLngs(currentLatLngs);
+            }
+          }
+          if (routePolylineGlowRef.current) {
+            const currentGlowLatLngs = routePolylineGlowRef.current.getLatLngs() as L.LatLng[];
+            if (currentGlowLatLngs.length > 0) {
+              currentGlowLatLngs[0] = L.latLng(currentLat, currentLng);
+              routePolylineGlowRef.current.setLatLngs(currentGlowLatLngs);
+            }
+          }
         }
 
         if (progress < 1) {
           animationFrameRef.current = requestAnimationFrame(animateMarker);
         } else {
-          // Snap map frame to end coordinates and zoom to active track
+          // Snap map camera framing to the settled coordinates
           map.panTo([targetLat, targetLng]);
+          // Refresh route line completely to align perfectly with OSRM roads
+          updateRouteLine(targetLat, targetLng);
+          // Try to fit bounds if it has not happened yet
+          fitMapBounds();
         }
       };
 
@@ -137,3 +349,4 @@ export default function MapComponent({ location, status }: MapComponentProps) {
     </div>
   );
 }
+

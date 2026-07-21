@@ -315,7 +315,11 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
           {/* Live map viewport */}
           <div className="relative">
             {location ? (
-              <MapComponent location={location} status={linkData.status} />
+              <MapComponent 
+                location={location} 
+                status={linkData.status} 
+                destinationAddress={linkData.address}
+              />
             ) : (
               <div className="w-full h-[300px] bg-slate-100 flex flex-col items-center justify-center p-6 text-center">
                 <MapPin className="w-10 h-10 text-gray-400 animate-bounce mb-3" />

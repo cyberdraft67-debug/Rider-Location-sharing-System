@@ -17,6 +17,22 @@ const parseAsUTC = (dateStr: string): Date => {
   return new Date(formatted);
 };
 
+// Haversine formula to compute distance in meters
+const getHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371e3; // Earth radius in meters
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
+
 interface RiderTrackerProps {
   token: string;
   onGoBack: () => void;
@@ -35,6 +51,7 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
   const [hasConfirmed, setHasConfirmed] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
+  const lastSentCoordsRef = useRef<{ latitude: number; longitude: number } | null>(null);
 
   // Fetch token details directly from Supabase
   const fetchDetails = async () => {
@@ -148,7 +165,16 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     // Immediately trigger an initial position fetch
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const { latitude, longitude } = position.coords;
+        const { latitude, longitude, accuracy } = position.coords;
+        
+        // Discard if accuracy is worse than 40m
+        if (accuracy && accuracy > 40) {
+          console.warn(`[GPS Filter] Discarded initial inaccurate GPS reading: ${accuracy.toFixed(1)}m accuracy (threshold is 40m)`);
+          return;
+        }
+
+        console.log(`[GPS Filter] Initial GPS reading accepted: ${accuracy ? accuracy.toFixed(1) + 'm' : 'unknown'} accuracy`);
+        lastSentCoordsRef.current = { latitude, longitude };
         setCoords({ latitude, longitude });
         sendLocation(latitude, longitude);
       },
@@ -163,7 +189,32 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     // Watch position in real-time, sending updates to Supabase whenever it changes
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
-        const { latitude, longitude } = position.coords;
+        const { latitude, longitude, accuracy } = position.coords;
+        
+        // 1. Discard if accuracy is worse than 40m
+        if (accuracy && accuracy > 40) {
+          console.warn(`[GPS Filter] Discarded inaccurate live update: ${accuracy.toFixed(1)}m accuracy (threshold is 40m)`);
+          return;
+        }
+
+        // 2. Discard if distance moved from last sent coords is less than 8 meters
+        if (lastSentCoordsRef.current) {
+          const distance = getHaversineDistance(
+            lastSentCoordsRef.current.latitude,
+            lastSentCoordsRef.current.longitude,
+            latitude,
+            longitude
+          );
+          if (distance < 8) {
+            console.log(`[GPS Filter] Stationary/Small change ignored: Only moved ${distance.toFixed(1)}m (threshold is 8m)`);
+            return;
+          }
+          console.log(`[GPS Filter] Real movement detected! Moved ${distance.toFixed(1)}m. Dispatching update to Supabase...`);
+        } else {
+          console.log("[GPS Filter] Accepted first live GPS coordinate");
+        }
+
+        lastSentCoordsRef.current = { latitude, longitude };
         setCoords({ latitude, longitude });
         sendLocation(latitude, longitude);
       },
@@ -180,6 +231,7 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
+    lastSentCoordsRef.current = null; // Clear on pause
     setIsSharing(false);
     setUpdateStatus("idle");
   };
