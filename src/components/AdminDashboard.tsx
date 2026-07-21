@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from "react";
-import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle } from "lucide-react";
+import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle, Copy, Check } from "lucide-react";
 import { TrackingLink } from "../types";
 import { supabase } from "../supabaseClient";
 
@@ -34,6 +34,11 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
   const [address, setAddress] = useState("");
   const [formError, setFormError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // States for copy feedback and newly created order links
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [newlyCreatedLink, setNewlyCreatedLink] = useState<TrackingLink | null>(null);
+  const [modalCopied, setModalCopied] = useState(false);
 
   // Simulation status for active orders
   const [simulatingToken, setSimulatingToken] = useState<string | null>(null);
@@ -189,17 +194,29 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
       const expiresAt = new Date(now.getTime() + 3 * 60 * 60 * 1000); // 3 hours from creation
       const token = generateRandomToken();
 
+      const newLinkObj: TrackingLink = {
+        id: orderId.trim(),
+        token: token,
+        order_id: orderId.trim(),
+        rider_id: riderId.trim(),
+        customer_id: customerId.trim(),
+        address: address.trim(),
+        status: "active",
+        created_at: now.toISOString(),
+        expires_at: expiresAt.toISOString(),
+      };
+
       const { error } = await supabase
         .from("tracking_links")
         .insert({
-          order_id: orderId.trim(),
-          rider_id: riderId.trim(),
-          customer_id: customerId.trim(),
-          address: address.trim(),
-          token: token,
-          status: "active",
-          created_at: now.toISOString(),
-          expires_at: expiresAt.toISOString(),
+          order_id: newLinkObj.order_id,
+          rider_id: newLinkObj.rider_id,
+          customer_id: newLinkObj.customer_id,
+          address: newLinkObj.address,
+          token: newLinkObj.token,
+          status: newLinkObj.status,
+          created_at: newLinkObj.created_at,
+          expires_at: newLinkObj.expires_at,
         });
 
       if (error) {
@@ -211,6 +228,7 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
       setCustomerId("");
       setAddress("");
       await fetchOrders();
+      setNewlyCreatedLink(newLinkObj);
       setActiveTab("links");
     } catch (err: any) {
       console.error("Failed to insert tracking link:", err);
@@ -232,6 +250,74 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 font-sans">
+      
+      {/* Newly Created Order/Rider Tracking Link Success Modal */}
+      {newlyCreatedLink && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-950/60 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-xl max-w-md w-full p-6 text-center space-y-4">
+            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-100 text-emerald-600 mb-2">
+              <CheckCircle className="h-6 w-6" />
+            </div>
+            
+            <div>
+              <h3 className="text-xl font-bold text-gray-900 font-display">Tracking Link Generated!</h3>
+              <p className="text-xs text-gray-500 mt-1">This secure link is ready to be sent to your rider.</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-gray-50 text-left text-xs space-y-2 border border-gray-100 font-medium">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Order ID:</span>
+                <span className="font-bold text-gray-900">{newlyCreatedLink.order_id}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Rider:</span>
+                <span className="font-semibold text-gray-800">{newlyCreatedLink.rider_id}</span>
+              </div>
+              <div className="border-t border-gray-200/60 pt-2 flex flex-col gap-1">
+                <span className="text-gray-400 text-[10px] uppercase font-bold tracking-wider">Delivery Address:</span>
+                <span className="text-gray-700 leading-normal">{newlyCreatedLink.address}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 text-left">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">Rider Secure Link</label>
+              <div className="flex items-center gap-2 bg-indigo-50/50 border border-indigo-100 rounded-xl p-2.5">
+                <input
+                  type="text"
+                  readOnly
+                  value={`${window.location.origin}/track/${newlyCreatedLink.token}`}
+                  className="bg-transparent border-none outline-none text-xs font-mono text-indigo-700 flex-1 select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/track/${newlyCreatedLink.token}`);
+                    setModalCopied(true);
+                    setTimeout(() => setModalCopied(false), 2000);
+                  }}
+                  className={`p-2 rounded-lg transition shrink-0 ${
+                    modalCopied ? "bg-emerald-100 text-emerald-700" : "bg-indigo-600 text-white hover:bg-indigo-700"
+                  }`}
+                  title="Copy Rider Link"
+                >
+                  {modalCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setNewlyCreatedLink(null);
+                setModalCopied(false);
+              }}
+              className="w-full py-3 px-4 bg-gray-900 hover:bg-gray-800 text-white font-bold text-sm rounded-xl transition"
+            >
+              Done & Return to Dashboard
+            </button>
+          </div>
+        </div>
+      )}
       
       {/* Mobile-Friendly Tab Switcher: Only visible on mobile/tablet viewports */}
       <div className="flex lg:hidden bg-gray-100 p-1 rounded-2xl mb-6 max-w-md mx-auto">
@@ -459,6 +545,33 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                       >
                         <Eye className="w-3.5 h-3.5 text-gray-500" />
                         Customer View
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const riderLink = `${window.location.origin}/track/${link.token}`;
+                          navigator.clipboard.writeText(riderLink);
+                          setCopiedToken(link.token);
+                          setTimeout(() => setCopiedToken(null), 2000);
+                        }}
+                        className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px] ${
+                          copiedToken === link.token
+                            ? "bg-emerald-100 border border-emerald-200 text-emerald-800"
+                            : "bg-indigo-50 border border-indigo-100 hover:bg-indigo-100/70 text-indigo-700"
+                        }`}
+                        title="Copy secure link for WhatsApp/SMS"
+                      >
+                        {copiedToken === link.token ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            Copied Link!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5 text-indigo-500" />
+                            Copy Rider Link
+                          </>
+                        )}
                       </button>
                     </div>
 

@@ -32,6 +32,8 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
   const [updateStatus, setUpdateStatus] = useState<"idle" | "sending" | "success" | "offline">("idle");
   const [secondsSinceLastUpdate, setSecondsSinceLastUpdate] = useState(0);
 
+  const [hasConfirmed, setHasConfirmed] = useState(false);
+
   const watchIdRef = useRef<number | null>(null);
 
   // Fetch token details directly from Supabase
@@ -182,6 +184,11 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     setUpdateStatus("idle");
   };
 
+  const handleStartDelivery = () => {
+    setHasConfirmed(true);
+    startLocationSharing();
+  };
+
   const handleMarkComplete = async () => {
     if (!confirm("Are you sure you want to end location sharing?")) {
       return;
@@ -232,6 +239,73 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
   const isExpired = linkData.status === "expired";
   const isExpiredOrDelivered = isDelivered || isExpired;
 
+  const isDirectRiderLink = window.location.pathname.startsWith("/track/");
+
+  if (linkData.status === "active" && !hasConfirmed) {
+    return (
+      <div className="max-w-md mx-auto bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden font-sans">
+        {/* Header section with assigned notification */}
+        <div className="p-6 bg-indigo-50 border-b border-indigo-100 text-center space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-indigo-600 tracking-wider uppercase font-display bg-indigo-100 px-2.5 py-1 rounded-full">
+              New Assignment
+            </span>
+            {!isDirectRiderLink && (
+              <button onClick={onGoBack} className="text-xs text-gray-500 hover:text-gray-800 font-medium underline">
+                Dashboard
+              </button>
+            )}
+          </div>
+          
+          <div className="mx-auto inline-flex items-center justify-center h-12 w-12 rounded-full bg-indigo-100 text-indigo-600">
+            <Navigation className="h-6 w-6 text-indigo-600 animate-pulse animate-bounce" />
+          </div>
+          
+          <h2 className="text-xl font-bold text-gray-900 font-display">Order Assigned</h2>
+          <p className="text-sm text-gray-600 leading-normal">
+            You've been assigned <strong>Order #{linkData.order_id}</strong>
+          </p>
+        </div>
+
+        {/* Info panel */}
+        <div className="p-6 space-y-6">
+          <div className="space-y-4">
+            <div className="p-4 rounded-2xl bg-gray-50 border border-gray-100 text-xs space-y-2.5 font-medium">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Order ID:</span>
+                <span className="font-bold text-gray-900">{linkData.order_id}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Rider ID:</span>
+                <span className="font-semibold text-gray-800">{linkData.rider_id}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Customer ID:</span>
+                <span className="font-semibold text-gray-800">{linkData.customer_id}</span>
+              </div>
+              <div className="border-t border-gray-200/60 pt-2.5 flex flex-col gap-1 text-left">
+                <span className="text-gray-400 text-[10px] uppercase font-bold tracking-wider">Delivery Destination:</span>
+                <span className="text-gray-700 leading-normal text-xs">{linkData.address || "Not specified"}</span>
+              </div>
+            </div>
+
+            <div className="text-xs text-gray-500 text-center leading-relaxed">
+              Tapping below will request GPS location permissions to start sharing your live position with the customer in real-time.
+            </div>
+          </div>
+
+          <button
+            onClick={handleStartDelivery}
+            className="flex items-center justify-center gap-2 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-4 rounded-2xl transition duration-150 shadow-md shadow-indigo-100 text-sm"
+          >
+            <Play className="w-5 h-5 fill-current" />
+            Start Delivery & Share Location
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-md mx-auto bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden font-sans">
       {/* Header section */}
@@ -240,9 +314,11 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
           <span className="text-xs font-bold text-indigo-600 tracking-wider uppercase font-display bg-indigo-100 px-2.5 py-1 rounded-full">
             Rider Console
           </span>
-          <button onClick={onGoBack} className="text-xs text-gray-500 hover:text-gray-800 font-medium underline">
-            Dashboard
-          </button>
+          {!isDirectRiderLink && (
+            <button onClick={onGoBack} className="text-xs text-gray-500 hover:text-gray-800 font-medium underline">
+              Dashboard
+            </button>
+          )}
         </div>
         <h2 className="text-2xl font-bold text-gray-900 font-display">Order {linkData.order_id}</h2>
         <div className="mt-2 flex flex-col gap-1 text-sm text-gray-600">
