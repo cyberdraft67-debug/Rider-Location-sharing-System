@@ -47,9 +47,9 @@ export default function App() {
     if (newView.type === "dashboard") {
       window.history.pushState({}, "", "/");
     } else if (newView.type === "rider") {
-      window.history.pushState({}, "", `/?page=track&token=${newView.token}`);
+      window.history.pushState({}, "", `/track/${newView.token}`);
     } else if (newView.type === "customer") {
-      window.history.pushState({}, "", `/?page=view&token=${newView.token}`);
+      window.history.pushState({}, "", `/view/${newView.token}`);
     }
   };
 
