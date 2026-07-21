@@ -235,21 +235,32 @@ export default function MapComponent({ location, status, destinationAddress }: M
     const startLat = currentCoordsRef.current?.[0] ?? targetLat;
     const startLng = currentCoordsRef.current?.[1] ?? targetLng;
 
-    // Calculate heading/bearing based on movement if distance is notable (> 2m)
+    // Calculate heading/bearing based on movement if distance is notable (> 8m)
     const movementDistance = getHaversineDistance(startLat, startLng, targetLat, targetLng);
-    if (movementDistance > 2) {
-      headingRef.current = getBearing(startLat, startLng, targetLat, targetLng);
+    const isFirstTime = !riderMarkerRef.current;
+
+    // Keep the distance filter ONLY for deciding whether to redraw/move the marker position.
+    // If the phone hasn't actually moved meaningfully (less than 8m), keep the arrow's
+    // last known rotation instead of recalculating it from near-identical/noisy coordinates.
+    if (!isFirstTime && movementDistance < 8) {
+      console.log(`[Map View] Minor noise/jitter change ignored visually (${movementDistance.toFixed(1)}m). Marker stays stationary.`);
+      return;
     }
 
-    // Define a beautiful rotating Navigation Arrow custom div icon
-    const riderIcon = L.divIcon({
+    if (!isFirstTime && movementDistance >= 8) {
+      headingRef.current = getBearing(startLat, startLng, targetLat, targetLng);
+      console.log(`[Map View] Movement detected (${movementDistance.toFixed(1)}m). Rotating arrow to ${headingRef.current.toFixed(1)}° and animating marker...`);
+    }
+
+    // Helper to get a beautiful rotating Navigation Arrow custom div icon
+    const getRiderIcon = (heading: number) => L.divIcon({
       className: "custom-rider-icon",
       html: `
         <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px;">
           <!-- Glowing wave shadow -->
           <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(79, 70, 229, 0.2); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
           <!-- Arrow container rotating -->
-          <div class="rider-arrow-container" style="transition: transform 0.3s ease-out; transform: rotate(${headingRef.current}deg); width: 28px; height: 28px; border-radius: 9999px; background-color: #4f46e5; border: 2px solid #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center;">
+          <div class="rider-arrow-container" style="transition: transform 0.3s ease-out; transform: rotate(${heading}deg); width: 28px; height: 28px; border-radius: 9999px; background-color: #4f46e5; border: 2px solid #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center;">
             <!-- Navigation Arrow SVG rotated -45deg so it points straight North at 0deg -->
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(-45deg);">
               <polygon points="3 11 22 2 13 21 11 13 3 11"/>
@@ -261,9 +272,9 @@ export default function MapComponent({ location, status, destinationAddress }: M
       iconAnchor: [20, 20],
     });
 
-    if (!riderMarkerRef.current) {
+    if (isFirstTime) {
       // First time coordinate setup
-      const marker = L.marker([targetLat, targetLng], { icon: riderIcon }).addTo(map);
+      const marker = L.marker([targetLat, targetLng], { icon: getRiderIcon(headingRef.current) }).addTo(map);
       riderMarkerRef.current = marker;
       currentCoordsRef.current = [targetLat, targetLng];
       map.setView([targetLat, targetLng], 15);
@@ -275,6 +286,9 @@ export default function MapComponent({ location, status, destinationAddress }: M
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+
+      // Update marker icon to reflect new rotation
+      riderMarkerRef.current.setIcon(getRiderIcon(headingRef.current));
 
       const duration = 1000; // Exact 1.0 second movement animation
       const startTime = performance.now();
