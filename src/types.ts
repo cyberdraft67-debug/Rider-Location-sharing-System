@@ -8,6 +8,7 @@ export interface LocationUpdate {
 export interface TrackingLink {
   id: string;
   token: string;
+  customer_token?: string;
   order_id: string;
   rider_id: string;
   customer_id: string;

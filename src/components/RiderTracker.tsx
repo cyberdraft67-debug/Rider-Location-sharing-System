@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Play, Square, CheckCircle, Navigation, AlertTriangle, CloudOff, RefreshCw } from "lucide-react";
 import { TrackingLink, LocationUpdate } from "../types";
 import { supabase } from "../supabaseClient";
+import MapComponent from "./MapComponent";
 
 // Helper to parse any date string safely as UTC if it doesn't specify a timezone offset
 const parseAsUTC = (dateStr: string): Date => {
@@ -344,6 +345,13 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     );
   }
 
+  const mapLocation: LocationUpdate | null = coords ? {
+    order_id: linkData.order_id,
+    latitude: coords.latitude,
+    longitude: coords.longitude,
+    updated_at: new Date().toISOString()
+  } : null;
+
   return (
     <div className="max-w-md mx-auto bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800/80 shadow-sm overflow-hidden font-sans transition-colors duration-200">
       {/* Header section */}
@@ -386,6 +394,17 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
           </div>
         ) : (
           <div className="space-y-6">
+            {/* Live Map View */}
+            {isSharing && coords && (
+              <div className="overflow-hidden rounded-2xl border border-slate-150 dark:border-slate-800 shadow-sm">
+                <MapComponent
+                  location={mapLocation}
+                  status={linkData.status}
+                  destinationAddress={linkData.address}
+                />
+              </div>
+            )}
+
             {/* Status indicators */}
             <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800/80 transition-colors duration-200">
               <h4 className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 tracking-wider uppercase mb-3">Live Status</h4>

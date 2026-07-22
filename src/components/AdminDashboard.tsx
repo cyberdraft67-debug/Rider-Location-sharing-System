@@ -37,8 +37,10 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
 
   // States for copy feedback and newly created order links
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [copiedCustomerToken, setCopiedCustomerToken] = useState<string | null>(null);
   const [newlyCreatedLink, setNewlyCreatedLink] = useState<TrackingLink | null>(null);
   const [modalCopied, setModalCopied] = useState(false);
+  const [modalCustomerCopied, setModalCustomerCopied] = useState(false);
 
   // Simulation status for active orders
   const [simulatingToken, setSimulatingToken] = useState<string | null>(null);
@@ -305,11 +307,38 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
               </div>
             </div>
 
+            <div className="space-y-1.5 text-left">
+              <label className="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Customer Secure Link</label>
+              <div className="flex items-center gap-2 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-xl p-2.5">
+                <input
+                  type="text"
+                  readOnly
+                  value={`${window.location.origin}/view/cust_${newlyCreatedLink.token}`}
+                  className="bg-transparent border-none outline-none text-xs font-mono text-indigo-700 dark:text-indigo-300 flex-1 select-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/view/cust_${newlyCreatedLink.token}`);
+                    setModalCustomerCopied(true);
+                    setTimeout(() => setModalCustomerCopied(false), 2000);
+                  }}
+                  className={`p-2 rounded-lg transition shrink-0 ${
+                    modalCustomerCopied ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400" : "bg-indigo-600 text-white hover:bg-indigo-700"
+                  }`}
+                  title="Copy Customer Link"
+                >
+                  {modalCustomerCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={() => {
                 setNewlyCreatedLink(null);
                 setModalCopied(false);
+                setModalCustomerCopied(false);
               }}
               className="w-full py-3 px-4 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-sm rounded-xl transition"
             >
@@ -542,7 +571,7 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                       </button>
 
                       <button
-                        onClick={() => onSelectCustomer(link.token)}
+                        onClick={() => onSelectCustomer(`cust_${link.token}`)}
                         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-indigo-50/20 dark:hover:bg-indigo-950/20 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px]"
                       >
                         <Eye className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
@@ -561,17 +590,44 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                             ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300"
                             : "bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300"
                         }`}
-                        title="Copy secure link for WhatsApp/SMS"
+                        title="Copy secure link for Rider"
                       >
                         {copiedToken === link.token ? (
                           <>
                             <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-450" />
-                            Copied Link!
+                            Copied Rider!
                           </>
                         ) : (
                           <>
                             <Copy className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-450" />
                             Copy Rider Link
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const customerLink = `${window.location.origin}/view/cust_${link.token}`;
+                          navigator.clipboard.writeText(customerLink);
+                          setCopiedCustomerToken(link.token);
+                          setTimeout(() => setCopiedCustomerToken(null), 2000);
+                        }}
+                        className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px] ${
+                          copiedCustomerToken === link.token
+                            ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300"
+                            : "bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300"
+                        }`}
+                        title="Copy secure link for Customer"
+                      >
+                        {copiedCustomerToken === link.token ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-450" />
+                            Copied Cust!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-450" />
+                            Copy Customer Link
                           </>
                         )}
                       </button>

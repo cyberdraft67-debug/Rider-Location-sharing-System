@@ -6,6 +6,7 @@ import { createServer as createViteServer } from "vite";
 interface TrackingLink {
   id: string;
   token: string;
+  customer_token?: string;
   order_id: string;
   rider_id: string;
   customer_id: string;
@@ -117,6 +118,9 @@ async function startServer() {
         console.log(`Tracking token ${link.token} (Order ${link.order_id}) has expired.`);
         // Broadcast completion/expiration to client
         broadcastToSSE(link.token, { type: "status_change", status: "expired" });
+        if (link.customer_token) {
+          broadcastToSSE(link.customer_token, { type: "status_change", status: "expired" });
+        }
       }
     });
     if (modified) {
@@ -158,6 +162,7 @@ async function startServer() {
     const newLink: TrackingLink = {
       id: Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15),
       token: generateRandomToken(),
+      customer_token: generateRandomToken(),
       order_id: String(order_id).trim(),
       rider_id: String(rider_id).trim(),
       customer_id: String(customer_id).trim(),
@@ -188,7 +193,7 @@ async function startServer() {
   // API 3: Get tracking link details by token
   app.get("/api/tracking/:token", (req, res) => {
     const { token } = req.params;
-    const link = db.tracking_links.find((l) => l.token === token);
+    const link = db.tracking_links.find((l) => l.token === token || l.customer_token === token);
 
     if (!link) {
       res.status(404).json({ error: "Tracking link not found" });
@@ -243,8 +248,11 @@ async function startServer() {
     db.location_updates[link.order_id] = update;
     saveDB(db);
 
-    // Broadcast location update via SSE to subscribed customers
-    broadcastToSSE(token, { type: "location_update", location: update });
+    // Broadcast location update via SSE to subscribed customers (both rider and customer tokens)
+    broadcastToSSE(link.token, { type: "location_update", location: update });
+    if (link.customer_token) {
+      broadcastToSSE(link.customer_token, { type: "location_update", location: update });
+    }
 
     res.json({ success: true, location: update });
   });
@@ -252,7 +260,7 @@ async function startServer() {
   // API 5: Complete delivery (Either Rider or Customer clicks delivered)
   app.post("/api/tracking/:token/complete", (req, res) => {
     const { token } = req.params;
-    const link = db.tracking_links.find((l) => l.token === token);
+    const link = db.tracking_links.find((l) => l.token === token || l.customer_token === token);
 
     if (!link) {
       res.status(404).json({ error: "Tracking link not found" });
@@ -262,8 +270,11 @@ async function startServer() {
     link.status = "delivered";
     saveDB(db);
 
-    // Broadcast status change to clients
-    broadcastToSSE(token, { type: "status_change", status: "delivered" });
+    // Broadcast status change to clients (both rider and customer tokens)
+    broadcastToSSE(link.token, { type: "status_change", status: "delivered" });
+    if (link.customer_token) {
+      broadcastToSSE(link.customer_token, { type: "status_change", status: "delivered" });
+    }
 
     res.json({ success: true, link });
   });
@@ -271,7 +282,7 @@ async function startServer() {
   // API 6: Server-Sent Events (SSE) Stream for real-time customer tracking
   app.get("/api/tracking/:token/stream", (req, res) => {
     const { token } = req.params;
-    const link = db.tracking_links.find((l) => l.token === token);
+    const link = db.tracking_links.find((l) => l.token === token || l.customer_token === token);
 
     if (!link) {
       res.status(404).json({ error: "Tracking link not found" });

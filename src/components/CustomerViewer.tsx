@@ -38,10 +38,12 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
     try {
       setError(null);
       
+      const cleanToken = token.startsWith("cust_") ? token.replace(/^cust_/, "") : token;
+      
       const { data: link, error: linkError } = await supabase
         .from("tracking_links")
         .select("*")
-        .eq("token", token)
+        .eq("token", cleanToken)
         .single();
 
       if (linkError || !link) {
