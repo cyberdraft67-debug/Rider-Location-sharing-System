@@ -13,7 +13,9 @@ export interface TrackingLink {
   rider_id: string;
   customer_id: string;
   address: string;
-  status: 'active' | 'delivered' | 'expired';
+  status: 'active' | 'delivered' | 'expired' | 'sos_alert';
+  sos_alert?: boolean;
+  sos_timestamp?: string;
   created_at: string;
   expires_at: string;
   location?: LocationUpdate | null;

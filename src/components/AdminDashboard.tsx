@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from "react";
-import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle, Copy, Check } from "lucide-react";
+import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle, Copy, Check, Siren } from "lucide-react";
 import { TrackingLink } from "../types";
 import { supabase } from "../supabaseClient";
 
@@ -250,6 +250,44 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
     setSimulatingToken(null);
   };
 
+  const handleClearSOS = async (linkId: string) => {
+    try {
+      const { error } = await supabase
+        .from("tracking_links")
+        .update({
+          status: "active",
+          sos_alert: false,
+          sos_timestamp: null,
+        })
+        .eq("id", linkId);
+
+      if (error) {
+        console.error("Supabase clear SOS notice:", error);
+      }
+
+      // Also call express server endpoint if available
+      const target = orders.find((o) => o.id === linkId);
+      if (target) {
+        try {
+          await fetch(`/api/tracking/${target.token}/sos`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ active: false }),
+          });
+        } catch (e) {
+          // Safe fallback
+        }
+      }
+
+      await fetchOrders();
+    } catch (err) {
+      console.error("Failed to clear SOS alert:", err);
+      alert("Failed to clear SOS alert.");
+    }
+  };
+
+  const sosOrders = orders.filter((o) => o.status === "sos_alert" || o.sos_alert);
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 font-sans">
       
@@ -348,6 +386,32 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
         </div>
       )}
       
+      {/* Top Emergency SOS Alert Banner */}
+      {sosOrders.length > 0 && (
+        <div className="mb-6 p-4 bg-red-600 text-white rounded-3xl shadow-lg border border-red-500 animate-pulse flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-white/20 rounded-2xl shrink-0">
+              <Siren className="w-6 h-6 text-white animate-spin" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-sm uppercase tracking-wider flex items-center gap-2">
+                <span>🚨 EMERGENCY SOS ALERT ACTIVE</span>
+                <span className="bg-white text-red-700 px-2 py-0.5 rounded-full text-xs">{sosOrders.length}</span>
+              </h3>
+              <p className="text-xs text-red-100 mt-0.5">
+                Rider reported an emergency! Affected order(s): {sosOrders.map((o) => `${o.order_id} (${o.rider_id})`).join(", ")}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveTab("links")}
+            className="bg-white text-red-700 hover:bg-red-50 text-xs font-bold px-4 py-2 rounded-xl transition shadow shrink-0"
+          >
+            Review Emergency Orders
+          </button>
+        </div>
+      )}
+
       {/* Mobile-Friendly Tab Switcher: Only visible on mobile/tablet viewports */}
       <div className="flex lg:hidden bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl mb-6 max-w-md mx-auto transition-colors duration-200">
         <button
@@ -495,7 +559,8 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
           ) : (
             <div className="space-y-4 max-h-[540px] overflow-y-auto pr-1">
               {orders.map((link) => {
-                const isActive = link.status === "active";
+                const isSosAlert = link.status === "sos_alert" || link.sos_alert;
+                const isActive = link.status === "active" || isSosAlert;
                 const isDelivered = link.status === "delivered";
                 const isExpired = link.status === "expired";
                 const isThisSimulating = simulatingToken === link.token;
@@ -504,7 +569,9 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                   <div
                     key={link.id}
                     className={`p-4 border rounded-2xl transition-all duration-150 relative overflow-hidden ${
-                      isThisSimulating 
+                      isSosAlert
+                        ? "border-red-500 dark:border-red-500 bg-red-500/10 dark:bg-red-950/20 shadow-md shadow-red-500/10 animate-pulse"
+                        : isThisSimulating 
                         ? "border-indigo-400 dark:border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/10" 
                         : "border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-950/20"
                     }`}
@@ -513,12 +580,18 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-slate-900 dark:text-white font-display text-sm">{link.order_id}</span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            isActive ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300" :
-                            isDelivered ? "bg-indigo-100 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-300" : "bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300"
-                          }`}>
-                            {link.status}
-                          </span>
+                          {isSosAlert ? (
+                            <span className="bg-red-600 text-white font-extrabold text-[10px] px-2.5 py-0.5 rounded-full flex items-center gap-1 uppercase tracking-wider animate-bounce">
+                              <Siren className="w-3 h-3" /> EMERGENCY SOS
+                            </span>
+                          ) : (
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              isActive ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300" :
+                              isDelivered ? "bg-indigo-100 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-300" : "bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300"
+                            }`}>
+                              {link.status}
+                            </span>
+                          )}
                         </div>
                         {link.address && (
                           <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1">
@@ -562,6 +635,16 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
 
                     {/* Tracking link routes shortcut buttons */}
                     <div className="mt-3 flex flex-wrap gap-2 pt-3 border-t border-slate-100 dark:border-slate-850/60">
+                      {isSosAlert && (
+                        <button
+                          onClick={() => handleClearSOS(link.id)}
+                          className="bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition shadow w-full"
+                        >
+                          <Siren className="w-3.5 h-3.5 text-white animate-spin" />
+                          Acknowledge & Resolve Emergency SOS
+                        </button>
+                      )}
+
                       <button
                         onClick={() => onSelectRider(link.token)}
                         className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-indigo-50/20 dark:hover:bg-indigo-950/20 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px]"

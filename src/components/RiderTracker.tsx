@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Play, Square, CheckCircle, Navigation, AlertTriangle, CloudOff, RefreshCw } from "lucide-react";
+import { Play, Square, CheckCircle, Navigation, AlertTriangle, CloudOff, RefreshCw, Gauge, Siren } from "lucide-react";
 import { TrackingLink, LocationUpdate } from "../types";
 import { supabase } from "../supabaseClient";
 import MapComponent from "./MapComponent";
@@ -50,9 +50,11 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
   const [secondsSinceLastUpdate, setSecondsSinceLastUpdate] = useState(0);
 
   const [hasConfirmed, setHasConfirmed] = useState(false);
+  const [currentSpeed, setCurrentSpeed] = useState<number>(0);
 
   const watchIdRef = useRef<number | null>(null);
   const lastSentCoordsRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const prevPosRef = useRef<{ lat: number; lng: number; timestamp: number } | null>(null);
 
   // Fetch token details directly from Supabase
   const fetchDetails = async () => {
@@ -169,6 +171,41 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     }
   };
 
+  // Calculate velocity in km/h from position updates
+  const processPosition = (position: GeolocationPosition) => {
+    const { latitude, longitude, speed } = position.coords;
+    const now = position.timestamp || Date.now();
+
+    let calculatedSpeedKmh = 0;
+
+    if (speed !== null && speed !== undefined && !isNaN(speed) && speed >= 0) {
+      calculatedSpeedKmh = speed * 3.6;
+    } else if (prevPosRef.current) {
+      const distMeters = getHaversineDistance(
+        prevPosRef.current.lat,
+        prevPosRef.current.lng,
+        latitude,
+        longitude
+      );
+      const timeDeltaSec = (now - prevPosRef.current.timestamp) / 1000;
+      if (timeDeltaSec > 0.3) {
+        const mps = distMeters / timeDeltaSec;
+        calculatedSpeedKmh = mps * 3.6;
+      }
+    }
+
+    if (calculatedSpeedKmh < 0.8) calculatedSpeedKmh = 0;
+    if (calculatedSpeedKmh > 180) calculatedSpeedKmh = 0;
+
+    prevPosRef.current = { lat: latitude, lng: longitude, timestamp: now };
+    setCurrentSpeed(Math.round(calculatedSpeedKmh));
+
+    console.log(`[GPS] Coordinate update: [${latitude}, ${longitude}], speed: ${Math.round(calculatedSpeedKmh)} km/h`);
+    lastSentCoordsRef.current = { latitude, longitude };
+    setCoords({ latitude, longitude });
+    sendLocation(latitude, longitude);
+  };
+
   // Start reading GPS and sending updates directly to Supabase
   const startLocationSharing = () => {
     if (!("geolocation" in navigator)) {
@@ -182,11 +219,7 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     // Immediately trigger an initial position fetch
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const { latitude, longitude } = position.coords;
-        console.log(`[GPS] Initial GPS reading accepted: [${latitude}, ${longitude}]`);
-        lastSentCoordsRef.current = { latitude, longitude };
-        setCoords({ latitude, longitude });
-        sendLocation(latitude, longitude);
+        processPosition(position);
       },
       (error) => {
         console.error("Initial GPS reading failed:", error);
@@ -199,11 +232,7 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     // Watch position in real-time, sending updates to Supabase whenever it changes
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
-        const { latitude, longitude } = position.coords;
-        console.log(`[GPS] Live GPS coordinate update received: [${latitude}, ${longitude}]`);
-        lastSentCoordsRef.current = { latitude, longitude };
-        setCoords({ latitude, longitude });
-        sendLocation(latitude, longitude);
+        processPosition(position);
       },
       (error) => {
         console.error("GPS Watch error:", error);
@@ -219,6 +248,8 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
       watchIdRef.current = null;
     }
     lastSentCoordsRef.current = null; // Clear on pause
+    prevPosRef.current = null;
+    setCurrentSpeed(0);
     setIsSharing(false);
     setUpdateStatus("idle");
   };
@@ -245,6 +276,45 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
     } catch (err: any) {
       console.error("Failed to mark delivery as complete in Supabase:", err);
       alert("Failed to complete order. Please try again.");
+    }
+  };
+
+  const handleToggleSOS = async (activate: boolean) => {
+    if (activate) {
+      if (!confirm("🚨 TRIGGER EMERGENCY SOS ALERT?\n\nThis will immediately dispatch a high-priority alert to the Admin Dashboard with your order details and live GPS coordinates.")) {
+        return;
+      }
+    }
+    try {
+      // Update status and alert state in Supabase
+      const { error: updateError } = await supabase
+        .from("tracking_links")
+        .update({
+          status: activate ? "sos_alert" : "active",
+          sos_alert: activate,
+          sos_timestamp: activate ? new Date().toISOString() : null,
+        })
+        .eq("id", linkData!.id);
+
+      if (updateError) {
+        console.error("Supabase SOS update fallback notice:", updateError);
+      }
+
+      // Also notify API server
+      try {
+        await fetch(`/api/tracking/${linkData!.token}/sos`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active: activate }),
+        });
+      } catch (e) {
+        // Safe fallback if client is purely Supabase-backed
+      }
+
+      await fetchDetails();
+    } catch (err: any) {
+      console.error("Failed to toggle SOS:", err);
+      alert("Failed to update SOS alert status. Please try again.");
     }
   };
 
@@ -380,6 +450,27 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
 
       {/* Main console content */}
       <div className="p-6">
+        {/* Active Emergency SOS Alert Banner */}
+        {(linkData.status === "sos_alert" || linkData.sos_alert) && (
+          <div className="mb-5 p-4 bg-red-600 text-white rounded-2xl shadow-lg border border-red-500 animate-pulse flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Siren className="w-5 h-5 text-white animate-spin" />
+                <span className="font-extrabold text-xs uppercase tracking-wider">🚨 EMERGENCY SOS BROADCAST ACTIVE</span>
+              </div>
+              <button
+                onClick={() => handleToggleSOS(false)}
+                className="bg-white text-red-700 hover:bg-red-50 text-[11px] font-extrabold px-3 py-1 rounded-xl shadow transition"
+              >
+                Clear SOS
+              </button>
+            </div>
+            <p className="text-xs text-red-100 leading-normal">
+              High-priority alert sent to Admin Dashboard. Dispatchers have been provided with your live GPS location.
+            </p>
+          </div>
+        )}
+
         {isExpiredOrDelivered ? (
           <div className="text-center py-8">
             <CheckCircle className={`w-16 h-16 mx-auto mb-4 ${isDelivered ? "text-emerald-500" : "text-amber-500"}`} />
@@ -402,6 +493,75 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
                   status={linkData.status}
                   destinationAddress={linkData.address}
                 />
+              </div>
+            )}
+
+            {/* Speedometer UI Element */}
+            {isSharing && coords && (
+              <div className="p-5 rounded-2xl bg-gradient-to-b from-slate-900 to-slate-950 text-white border border-slate-800 shadow-md transition-all duration-200">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-indigo-400">
+                    <Gauge className="w-4 h-4 text-indigo-400 animate-pulse" />
+                    <span>Live Speedometer</span>
+                  </div>
+                  <span
+                    className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                      currentSpeed === 0
+                        ? "bg-slate-800 text-slate-400 border border-slate-700"
+                        : currentSpeed < 30
+                        ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                        : "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                    }`}
+                  >
+                    {currentSpeed === 0 ? "Stationary" : currentSpeed < 30 ? "Cruising" : "Transit"}
+                  </span>
+                </div>
+
+                <div className="flex flex-col items-center justify-center pt-2 relative">
+                  {/* SVG Arc Gauge */}
+                  <div className="relative w-48 h-28 flex items-end justify-center overflow-hidden">
+                    <svg className="w-48 h-28" viewBox="0 0 100 55">
+                      {/* Background Arc */}
+                      <path
+                        d="M 10 50 A 40 40 0 0 1 90 50"
+                        fill="none"
+                        stroke="#1e293b"
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                      />
+                      {/* Speed Arc */}
+                      <path
+                        d="M 10 50 A 40 40 0 0 1 90 50"
+                        fill="none"
+                        stroke="url(#speed-gradient)"
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray="125.66"
+                        strokeDashoffset={
+                          125.66 - Math.min((currentSpeed / 80) * 125.66, 125.66)
+                        }
+                        className="transition-all duration-500 ease-out"
+                      />
+                      <defs>
+                        <linearGradient id="speed-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                          <stop offset="0%" stopColor="#34d399" />
+                          <stop offset="50%" stopColor="#818cf8" />
+                          <stop offset="100%" stopColor="#fbbf24" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+
+                    {/* Center Readout */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-end pb-1 text-center">
+                      <span className="text-4xl font-extrabold font-mono tracking-tight text-white leading-none">
+                        {currentSpeed}
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
+                        km / h
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -484,6 +644,19 @@ export default function RiderTracker({ token, onGoBack }: RiderTrackerProps) {
               >
                 <CheckCircle className="w-5 h-5" />
                 Mark Delivery Complete
+              </button>
+
+              {/* Emergency SOS Button */}
+              <button
+                onClick={() => handleToggleSOS(!(linkData.status === "sos_alert" || linkData.sos_alert))}
+                className={`flex items-center justify-center gap-2 w-full font-bold py-3.5 px-4 rounded-2xl transition duration-150 shadow-md ${
+                  linkData.status === "sos_alert" || linkData.sos_alert
+                    ? "bg-red-700 hover:bg-red-800 text-white border-2 border-red-400 animate-pulse"
+                    : "bg-red-600 hover:bg-red-700 text-white shadow-red-200/20"
+                }`}
+              >
+                <Siren className="w-5 h-5 text-white" />
+                {linkData.status === "sos_alert" || linkData.sos_alert ? "Clear Emergency SOS Alert" : "Emergency / SOS Alert"}
               </button>
             </div>
 

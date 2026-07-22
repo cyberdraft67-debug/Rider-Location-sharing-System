@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import L from "leaflet";
+import { Map, Layers } from "lucide-react";
 import { LocationUpdate } from "../types";
 
 interface MapComponentProps {
@@ -41,8 +42,10 @@ function getBearing(lat1: number, lon1: number, lat2: number, lon2: number): num
 }
 
 export default function MapComponent({ location, status, destinationAddress, destinationCoords }: MapComponentProps) {
+  const [mapMode, setMapMode] = useState<"street" | "satellite">("street");
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
   const riderMarkerRef = useRef<L.Marker | null>(null);
   const destinationMarkerRef = useRef<L.Marker | null>(null);
   const routePolylineRef = useRef<L.Polyline | null>(null);
@@ -67,10 +70,6 @@ export default function MapComponent({ location, status, destinationAddress, des
       scrollWheelZoom: true,
     }).setView([startLat, startLng], 15);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
-
     mapRef.current = map;
 
     // Cleanup map on unmount
@@ -84,6 +83,36 @@ export default function MapComponent({ location, status, destinationAddress, des
       }
     };
   }, []);
+
+  // Manage Tile Layers (Street vs Satellite)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+
+    if (mapMode === "satellite") {
+      tileLayerRef.current = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        {
+          maxZoom: 19,
+          attribution:
+            "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+        }
+      ).addTo(map);
+    } else {
+      tileLayerRef.current = L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+          maxZoom: 19,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        }
+      ).addTo(map);
+    }
+  }, [mapMode]);
 
   // Fetch Destination Coordinates (Nominatim Geocoder fallback or via prop)
   useEffect(() => {
@@ -361,6 +390,36 @@ export default function MapComponent({ location, status, destinationAddress, des
     <div className="relative w-full h-[400px] md:h-[500px] rounded-2xl overflow-hidden border border-gray-100 shadow-inner">
       <div id="map-container" ref={mapContainerRef} className="w-full h-full z-10" />
       
+      {/* Map Layer View Mode Selector (Street / Satellite) */}
+      <div className="absolute top-3 left-12 z-20 bg-white/95 dark:bg-slate-900/95 backdrop-blur rounded-xl shadow-md border border-gray-200/80 dark:border-slate-800 p-1 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setMapMode("street")}
+          className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            mapMode === "street"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          }`}
+          title="Switch to Street Map view"
+        >
+          <Map className="w-3.5 h-3.5" />
+          <span>Street</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMapMode("satellite")}
+          className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            mapMode === "satellite"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          }`}
+          title="Switch to Satellite Imagery view"
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Satellite</span>
+        </button>
+      </div>
+
       {/* Overlay controls or markers details */}
       <div className="absolute top-3 right-3 z-20 bg-white/95 backdrop-blur px-3 py-1.5 rounded-lg shadow-md border border-gray-100 flex items-center gap-2">
         <span className="flex h-2.5 w-2.5 relative">

@@ -11,7 +11,9 @@ interface TrackingLink {
   rider_id: string;
   customer_id: string;
   address: string;
-  status: 'active' | 'delivered' | 'expired';
+  status: 'active' | 'delivered' | 'expired' | 'sos_alert';
+  sos_alert?: boolean;
+  sos_timestamp?: string;
   created_at: string;
   expires_at: string;
 }
@@ -274,6 +276,36 @@ async function startServer() {
     broadcastToSSE(link.token, { type: "status_change", status: "delivered" });
     if (link.customer_token) {
       broadcastToSSE(link.customer_token, { type: "status_change", status: "delivered" });
+    }
+
+    res.json({ success: true, link });
+  });
+
+  // API 5b: Trigger / Clear SOS Alert
+  app.post("/api/tracking/:token/sos", (req, res) => {
+    const { token } = req.params;
+    const { active, message } = req.body;
+    const link = db.tracking_links.find((l) => l.token === token || l.customer_token === token);
+
+    if (!link) {
+      res.status(404).json({ error: "Tracking link not found" });
+      return;
+    }
+
+    const isSosActive = active !== undefined ? Boolean(active) : true;
+    link.sos_alert = isSosActive;
+    if (isSosActive) {
+      link.status = "sos_alert";
+      link.sos_timestamp = new Date().toISOString();
+    } else {
+      link.status = "active";
+    }
+    saveDB(db);
+
+    // Broadcast status change to clients
+    broadcastToSSE(link.token, { type: "sos_alert", active: isSosActive, link });
+    if (link.customer_token) {
+      broadcastToSSE(link.customer_token, { type: "sos_alert", active: isSosActive, link });
     }
 
     res.json({ success: true, link });
