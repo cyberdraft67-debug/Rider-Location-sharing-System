@@ -30,6 +30,8 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
   const [location, setLocation] = useState<LocationUpdate | null>(null);
   const [secondsSinceUpdate, setSecondsSinceUpdate] = useState<number | null>(null);
   const [connectionState, setConnectionState] = useState<"connecting" | "live" | "offline">("connecting");
+  const [destinationCoords, setDestinationCoords] = useState<[number, number] | null>(null);
+  const [isGeocoding, setIsGeocoding] = useState(false);
 
   // Fetch token details initially from Supabase
   const fetchDetails = async () => {
@@ -80,6 +82,45 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
   useEffect(() => {
     fetchDetails();
   }, [token]);
+
+  // Geocode destination address when linkData.address is available
+  useEffect(() => {
+    if (!linkData?.address) {
+      setDestinationCoords(null);
+      return;
+    }
+
+    const geocodeAddress = async () => {
+      try {
+        setIsGeocoding(true);
+        console.log(`[CustomerViewer Geocoding] Resolving address: "${linkData.address}"`);
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(linkData.address)}&limit=1`
+        );
+        const data = await response.json();
+        if (data && data.length > 0) {
+          const lat = parseFloat(data[0].lat);
+          const lon = parseFloat(data[0].lon);
+          console.log(`[CustomerViewer Geocoding] Success: Resolved to [${lat}, ${lon}]`);
+          setDestinationCoords([lat, lon]);
+        } else {
+          // If geocoding yields no results, place destination at a slight offset from starting coords
+          const startLat = location?.latitude ?? 1.29027;
+          const startLng = location?.longitude ?? 103.851959;
+          const lat = startLat + 0.008;
+          const lon = startLng + 0.008;
+          console.warn(`[CustomerViewer Geocoding] No results found, using default offset fallback: [${lat}, ${lon}]`);
+          setDestinationCoords([lat, lon]);
+        }
+      } catch (err) {
+        console.error("[CustomerViewer Geocoding] Error resolving address:", err);
+      } finally {
+        setIsGeocoding(false);
+      }
+    };
+
+    geocodeAddress();
+  }, [linkData?.address]);
 
   // Real-time Supabase Subscription
   useEffect(() => {
@@ -257,6 +298,50 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
   const isExpired = linkData.status === "expired";
   const isExpiredOrDelivered = isDelivered || isExpired;
 
+  // Haversine formula to compute distance in meters
+  const getHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371e3; // Earth radius in meters
+    const phi1 = (lat1 * Math.PI) / 180;
+    const phi2 = (lat2 * Math.PI) / 180;
+    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+              Math.cos(phi1) * Math.cos(phi2) *
+              Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
+
+  // Calculate distance and ETA (Estimated Arrival)
+  let distanceMeters: number | null = null;
+  let etaMinutes: number | null = null;
+  let progressPercent = 0;
+
+  if (location && destinationCoords) {
+    distanceMeters = getHaversineDistance(
+      location.latitude,
+      location.longitude,
+      destinationCoords[0],
+      destinationCoords[1]
+    );
+
+    // Speed: 25 km/h = 25000 meters / 3600 seconds = 6.94 m/s
+    const speedMps = 25000 / 3600;
+    // Add routing factor of 1.3 to account for winding city streets
+    const routingFactor = 1.3;
+    const travelTimeSeconds = (distanceMeters * routingFactor) / speedMps;
+    etaMinutes = Math.max(1, Math.round(travelTimeSeconds / 60));
+
+    if (distanceMeters < 50) {
+      progressPercent = 100;
+    } else {
+      // Map 5km (or more) to 10% progress and 50m to 100% progress
+      progressPercent = Math.max(10, Math.min(100, Math.round(100 - (distanceMeters / 5000) * 90)));
+    }
+  }
+
   // Format last updated text
   const formatLastUpdated = () => {
     if (secondsSinceUpdate === null) return "Waiting for rider to start location sharing...";
@@ -319,6 +404,7 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
                 location={location} 
                 status={linkData.status} 
                 destinationAddress={linkData.address}
+                destinationCoords={destinationCoords}
               />
             ) : (
               <div className="w-full h-[300px] bg-slate-100 flex flex-col items-center justify-center p-6 text-center">
@@ -346,8 +432,54 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
 
           {/* Delivery progress details and action button */}
           <div className="p-6 space-y-6">
+            {/* Estimated Arrival Card */}
+            {location && destinationCoords && distanceMeters !== null && etaMinutes !== null && (
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-100 space-y-4">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <span className="text-[10px] font-bold tracking-wider uppercase opacity-85 bg-white/20 px-2.5 py-0.5 rounded-full">
+                      Estimated Arrival
+                    </span>
+                    <h3 className="text-3xl font-extrabold mt-2 tracking-tight">
+                      {distanceMeters < 50 ? (
+                        "Arriving Now"
+                      ) : (
+                        <>
+                          ~ {etaMinutes} <span className="text-lg font-semibold">min</span>
+                        </>
+                      )}
+                    </h3>
+                  </div>
+                  <div className="p-2.5 bg-white/10 rounded-xl">
+                    <Navigation className="w-5 h-5 text-white rotate-45 animate-pulse" />
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  <div className="flex justify-between text-xs font-semibold opacity-90">
+                    <span>
+                      {distanceMeters < 100 ? (
+                        "At your location"
+                      ) : distanceMeters < 1000 ? (
+                        `${Math.round(distanceMeters)}m remaining`
+                      ) : (
+                        `${(distanceMeters / 1000).toFixed(1)} km remaining`
+                      )}
+                    </span>
+                    <span className="opacity-75">25 km/h avg speed</span>
+                  </div>
+                  <div className="h-1.5 w-full bg-white/25 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-white rounded-full transition-all duration-500 ease-out"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Live details info card */}
-            <div className="flex gap-4 p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100/60">
+            <div className="flex gap-4 p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100/60 font-sans">
               <Clock className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
               <div>
                 <h4 className="text-sm font-bold text-indigo-950">Rider Position</h4>

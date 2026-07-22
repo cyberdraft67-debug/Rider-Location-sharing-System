@@ -6,6 +6,7 @@ interface MapComponentProps {
   location: LocationUpdate | null;
   status: "active" | "delivered" | "expired";
   destinationAddress?: string;
+  destinationCoords?: [number, number] | null;
 }
 
 // Haversine formula to compute distance in meters
@@ -39,7 +40,7 @@ function getBearing(lat1: number, lon1: number, lat2: number, lon2: number): num
   return (brng + 360) % 360;
 }
 
-export default function MapComponent({ location, status, destinationAddress }: MapComponentProps) {
+export default function MapComponent({ location, status, destinationAddress, destinationCoords }: MapComponentProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const riderMarkerRef = useRef<L.Marker | null>(null);
@@ -84,73 +85,83 @@ export default function MapComponent({ location, status, destinationAddress }: M
     };
   }, []);
 
-  // Fetch Destination Coordinates (Nominatim Geocoder)
+  // Fetch Destination Coordinates (Nominatim Geocoder fallback or via prop)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !destinationAddress) return;
+    if (!map) return;
 
-    const geocode = async () => {
-      try {
-        console.log(`[Geocoding] Querying Nominatim for address: "${destinationAddress}"`);
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1`
-        );
-        const data = await response.json();
-        
-        let destLat = 0;
-        let destLng = 0;
+    const setupDestination = async () => {
+      if (destinationCoords) {
+        console.log(`[Map View] Using provided destination coordinates: [${destinationCoords[0]}, ${destinationCoords[1]}]`);
+        destinationCoordsRef.current = destinationCoords;
+      } else if (destinationAddress) {
+        try {
+          console.log(`[Geocoding] Querying Nominatim for address: "${destinationAddress}"`);
+          const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinationAddress)}&limit=1`
+          );
+          const data = await response.json();
+          
+          let destLat = 0;
+          let destLng = 0;
 
-        if (data && data.length > 0) {
-          destLat = parseFloat(data[0].lat);
-          destLng = parseFloat(data[0].lon);
-          console.log(`[Geocoding] Success: Resolved "${destinationAddress}" to [${destLat}, ${destLng}]`);
-        } else {
-          // If geocoding yields no results, place destination at a slight offset from starting coords
-          const startLat = location?.latitude ?? 1.29027;
-          const startLng = location?.longitude ?? 103.851959;
-          destLat = startLat + 0.008;
-          destLng = startLng + 0.008;
-          console.warn(`[Geocoding] No results found for "${destinationAddress}". Using default offset fallback: [${destLat}, ${destLng}]`);
+          if (data && data.length > 0) {
+            destLat = parseFloat(data[0].lat);
+            destLng = parseFloat(data[0].lon);
+            console.log(`[Geocoding] Success: Resolved "${destinationAddress}" to [${destLat}, ${destLng}]`);
+          } else {
+            // If geocoding yields no results, place destination at a slight offset from starting coords
+            const startLat = location?.latitude ?? 1.29027;
+            const startLng = location?.longitude ?? 103.851959;
+            destLat = startLat + 0.008;
+            destLng = startLng + 0.008;
+            console.warn(`[Geocoding] No results found for "${destinationAddress}". Using default offset fallback: [${destLat}, ${destLng}]`);
+          }
+
+          destinationCoordsRef.current = [destLat, destLng];
+        } catch (err) {
+          console.error("[Geocoding] Error resolving address:", err);
+          return;
         }
-
-        destinationCoordsRef.current = [destLat, destLng];
-
-        // Custom Crimson Destination Pin Icon
-        const destIcon = L.divIcon({
-          className: "custom-dest-icon",
-          html: `
-            <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px;">
-              <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(244, 63, 94, 0.2); animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;"></div>
-              <div style="position: relative; width: 28px; height: 28px; border-radius: 9999px; background-color: #f43f5e; border: 2px solid #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center;">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-                  <circle cx="12" cy="10" r="3"/>
-                </svg>
-              </div>
-            </div>
-          `,
-          iconSize: [42, 42],
-          iconAnchor: [21, 21],
-        });
-
-        // Add or move destination marker
-        if (destinationMarkerRef.current) {
-          destinationMarkerRef.current.setLatLng([destLat, destLng]);
-        } else {
-          destinationMarkerRef.current = L.marker([destLat, destLng], { icon: destIcon })
-            .addTo(map)
-            .bindPopup(`<b>Destination</b><br/>${destinationAddress}`);
-        }
-
-        // Trigger map bounds fitting if we have both coordinates
-        fitMapBounds();
-      } catch (err) {
-        console.error("[Geocoding] Error resolving address:", err);
+      } else {
+        return;
       }
+
+      const [destLat, destLng] = destinationCoordsRef.current;
+
+      // Custom Crimson Destination Pin Icon
+      const destIcon = L.divIcon({
+        className: "custom-dest-icon",
+        html: `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px;">
+            <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(244, 63, 94, 0.2); animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;"></div>
+            <div style="position: relative; width: 28px; height: 28px; border-radius: 9999px; background-color: #f43f5e; border: 2px solid #ffffff; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                <circle cx="12" cy="10" r="3"/>
+              </svg>
+            </div>
+          </div>
+        `,
+        iconSize: [42, 42],
+        iconAnchor: [21, 21],
+      });
+
+      // Add or move destination marker
+      if (destinationMarkerRef.current) {
+        destinationMarkerRef.current.setLatLng([destLat, destLng]);
+      } else {
+        destinationMarkerRef.current = L.marker([destLat, destLng], { icon: destIcon })
+          .addTo(map)
+          .bindPopup(`<b>Destination</b><br/>${destinationAddress || "Selected Address"}`);
+      }
+
+      // Trigger map bounds fitting if we have both coordinates
+      fitMapBounds();
     };
 
-    geocode();
-  }, [destinationAddress]);
+    setupDestination();
+  }, [destinationAddress, destinationCoords]);
 
   // Fit bounds to show both rider and destination
   const fitMapBounds = () => {
