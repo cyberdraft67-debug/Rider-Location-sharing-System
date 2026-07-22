@@ -1,22 +1,18 @@
 import { useState, useEffect } from "react";
-import { CheckCircle, AlertTriangle, RefreshCw, Clock, MapPin, Navigation, Signal } from "lucide-react";
-import { TrackingLink, LocationUpdate } from "../types";
-import MapComponent from "./MapComponent";
 import { supabase } from "../supabaseClient";
-
-// Helper to parse any date string safely as UTC if it doesn't specify a timezone offset
-const parseAsUTC = (dateStr: string): Date => {
-  if (!dateStr) return new Date();
-  let formatted = dateStr;
-  if (formatted.includes(" ") && !formatted.includes("T")) {
-    formatted = formatted.replace(" ", "T");
-  }
-  // If it doesn't contain Z or an explicit timezone offset like +08 or -05, append Z to force UTC
-  if (!formatted.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(formatted)) {
-    formatted += "Z";
-  }
-  return new Date(formatted);
-};
+import { Order, LocationUpdate } from "../types";
+import MapComponent from "./MapComponent";
+import {
+  MapPin,
+  Clock,
+  ArrowLeft,
+  Truck,
+  CheckCircle2,
+  Navigation,
+  AlertCircle,
+  Phone,
+  Building,
+} from "lucide-react";
 
 interface CustomerViewerProps {
   token: string;
@@ -24,501 +20,184 @@ interface CustomerViewerProps {
 }
 
 export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps) {
+  const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [linkData, setLinkData] = useState<TrackingLink | null>(null);
-  const [location, setLocation] = useState<LocationUpdate | null>(null);
-  const [secondsSinceUpdate, setSecondsSinceUpdate] = useState<number | null>(null);
-  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "offline">("connecting");
-  const [destinationCoords, setDestinationCoords] = useState<[number, number] | null>(null);
-  const [isGeocoding, setIsGeocoding] = useState(false);
 
-  // Fetch token details initially from Supabase
-  const fetchDetails = async () => {
+  const fetchCustomerOrder = async () => {
     try {
-      setError(null);
-      
-      const cleanToken = token.startsWith("cust_") ? token.replace(/^cust_/, "") : token;
-      
-      const { data: link, error: linkError } = await supabase
-        .from("tracking_links")
+      const { data, error } = await supabase
+        .from("orders")
         .select("*")
-        .eq("token", cleanToken)
+        .eq("customer_token", token)
         .single();
 
-      if (linkError || !link) {
-        throw new Error(linkError?.message || "Failed to find tracking link");
-      }
-
-      // Check if expired and update status on demand
-      const now = new Date();
-      if (link.status === "active" && parseAsUTC(link.expires_at).getTime() < now.getTime()) {
-        const { error: updateError } = await supabase
-          .from("tracking_links")
-          .update({ status: "expired" })
-          .eq("id", link.id);
-        
-        if (!updateError) {
-          link.status = "expired";
+      if (error) throw error;
+      if (data) setOrder(data as Order);
+    } catch (err) {
+      console.warn("Could not load order from Supabase:", err);
+      // Local fallback
+      const local = localStorage.getItem("routepulse_local_orders");
+      if (local) {
+        try {
+          const list: Order[] = JSON.parse(local);
+          const found = list.find((o) => o.customer_token === token);
+          if (found) setOrder(found);
+        } catch {
+          /* ignore */
         }
       }
-
-      setLinkData(link);
-
-      const { data: loc, error: locError } = await supabase
-        .from("location_updates")
-        .select("*")
-        .eq("order_id", link.order_id)
-        .maybeSingle();
-
-      if (loc) {
-        setLocation(loc);
-      }
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDetails();
-  }, [token]);
+    fetchCustomerOrder();
 
-  // Geocode destination address when linkData.address is available
-  useEffect(() => {
-    if (!linkData?.address) {
-      setDestinationCoords(null);
-      return;
-    }
-
-    const geocodeAddress = async () => {
-      try {
-        setIsGeocoding(true);
-        console.log(`[CustomerViewer Geocoding] Resolving address: "${linkData.address}"`);
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(linkData.address)}&limit=1`
-        );
-        const data = await response.json();
-        if (data && data.length > 0) {
-          const lat = parseFloat(data[0].lat);
-          const lon = parseFloat(data[0].lon);
-          console.log(`[CustomerViewer Geocoding] Success: Resolved to [${lat}, ${lon}]`);
-          setDestinationCoords([lat, lon]);
-        } else {
-          // If geocoding yields no results, place destination at a slight offset from starting coords
-          const startLat = location?.latitude ?? 1.29027;
-          const startLng = location?.longitude ?? 103.851959;
-          const lat = startLat + 0.008;
-          const lon = startLng + 0.008;
-          console.warn(`[CustomerViewer Geocoding] No results found, using default offset fallback: [${lat}, ${lon}]`);
-          setDestinationCoords([lat, lon]);
-        }
-      } catch (err) {
-        console.error("[CustomerViewer Geocoding] Error resolving address:", err);
-      } finally {
-        setIsGeocoding(false);
-      }
-    };
-
-    geocodeAddress();
-  }, [linkData?.address]);
-
-  // Real-time Supabase Subscription
-  useEffect(() => {
-    if (loading || error || !linkData || linkData.status !== "active") return;
-
-    setConnectionState("connecting");
-    console.log(`[Realtime] Attempting to subscribe to channels for order_id: ${linkData.order_id}, link_id: ${linkData.id}`);
-
-    // Subscribe to postgres_changes on location_updates table for this specific order_id
-    const channel = supabase
-      .channel(`location-updates-${linkData.order_id}`)
+    // Subscribe to realtime updates for this specific customer order
+    const subscription = supabase
+      .channel(`cust_${token}`)
       .on(
         "postgres_changes",
-        {
-          event: "*", // Listen to INSERT, UPDATE, or ALL
-          schema: "public",
-          table: "location_updates",
-          filter: `order_id=eq.${linkData.order_id}`,
-        },
+        { event: "UPDATE", schema: "public", table: "orders" },
         (payload) => {
-          console.log("[Realtime] Location update payload received:", payload);
-          if (payload.new) {
-            const updatedLoc = payload.new as LocationUpdate;
-            console.log(`[Realtime] New location applied: lat=${updatedLoc.latitude}, lng=${updatedLoc.longitude}, updated_at=${updatedLoc.updated_at}`);
-            setLocation(updatedLoc);
+          if (payload.new && payload.new.customer_token === token) {
+            setOrder(payload.new as Order);
           }
         }
       )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "tracking_links",
-          filter: `id=eq.${linkData.id}`,
-        },
-        (payload) => {
-          console.log("[Realtime] Tracking link status update payload received:", payload);
-          if (payload.new) {
-            const updatedLink = payload.new as TrackingLink;
-            console.log(`[Realtime] Tracking link status changed: status=${updatedLink.status}`);
-            setLinkData(updatedLink);
-          }
-        }
-      )
-      .subscribe((status, err) => {
-        console.log(`[Realtime] Subscription status for order ${linkData.order_id}:`, status);
-        if (err) {
-          console.error(`[Realtime] Subscription error for order ${linkData.order_id}:`, err);
-        }
-        if (status === "SUBSCRIBED") {
-          console.log(`[Realtime] Channel connected successfully and listening for order ${linkData.order_id}`);
-          setConnectionState("live");
-        } else if (status === "CLOSED" || status === "TIMED_OUT") {
-          console.warn(`[Realtime] Channel closed or timed out: ${status}`);
-          setConnectionState("offline");
-        }
-      });
+      .subscribe();
 
     return () => {
-      console.log(`[Realtime] Cleaning up subscription channel for order ${linkData.order_id}`);
-      supabase.removeChannel(channel);
+      supabase.removeChannel(subscription);
     };
-  }, [loading, token, linkData?.order_id, linkData?.id, linkData?.status]);
-
-  // Fallback Polling Effect: Pull latest data every 6 seconds as a robust fallback
-  useEffect(() => {
-    if (loading || error || !linkData || linkData.status !== "active") return;
-
-    const pollFallback = async () => {
-      try {
-        console.log(`[Fallback Polling] Fetching latest location & status for order ${linkData.order_id}...`);
-        
-        // 1. Fetch location update
-        const { data: loc, error: locError } = await supabase
-          .from("location_updates")
-          .select("*")
-          .eq("order_id", linkData.order_id)
-          .maybeSingle();
-
-        if (locError) {
-          console.error("[Fallback Polling] Error fetching location:", locError);
-        } else if (loc) {
-          // Only update state if the data is actually newer or currently null
-          if (!location || parseAsUTC(loc.updated_at).getTime() > parseAsUTC(location.updated_at).getTime()) {
-            console.log(`[Fallback Polling] Found fresher location data: lat=${loc.latitude}, lng=${loc.longitude}, updated_at=${loc.updated_at}`);
-            setLocation(loc);
-          }
-        }
-
-        // 2. Fetch tracking link status
-        const { data: link, error: linkError } = await supabase
-          .from("tracking_links")
-          .select("*")
-          .eq("id", linkData.id)
-          .single();
-
-        if (linkError) {
-          console.error("[Fallback Polling] Error fetching tracking link:", linkError);
-        } else if (link && link.status !== linkData.status) {
-          console.log(`[Fallback Polling] Found status update: ${linkData.status} -> ${link.status}`);
-          setLinkData(link);
-        }
-      } catch (pollErr) {
-        console.error("[Fallback Polling] Unexpected error:", pollErr);
-      }
-    };
-
-    const interval = setInterval(pollFallback, 6000);
-    return () => clearInterval(interval);
-  }, [loading, error, linkData, location]);
-
-  // Handle ticking timer for "Last updated X seconds/minutes ago"
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (location?.updated_at) {
-      const updateTimer = () => {
-        const updatedTime = parseAsUTC(location.updated_at).getTime();
-        const diffSeconds = Math.max(0, Math.floor((Date.now() - updatedTime) / 1000));
-        setSecondsSinceUpdate(diffSeconds);
-      };
-      updateTimer();
-      interval = setInterval(updateTimer, 1000);
-    } else {
-      setSecondsSinceUpdate(null);
-    }
-    return () => clearInterval(interval);
-  }, [location]);
-
-  const handleMarkDelivered = async () => {
-    if (!confirm("Are you sure you have received your delivery? This will mark the order as complete.")) {
-      return;
-    }
-    try {
-      const { error: updateError } = await supabase
-        .from("tracking_links")
-        .update({ status: "delivered" })
-        .eq("id", linkData!.id);
-
-      if (updateError) throw updateError;
-      
-      await fetchDetails(); // Reload state
-    } catch (err: any) {
-      console.error("Failed to mark delivery as delivered from customer view:", err);
-      alert("Failed to confirm delivery. Please try again.");
-    }
-  };
+  }, [token]);
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 min-h-[400px]">
-        <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin mb-4" />
-        <p className="text-gray-500 font-medium">Loading live tracking map...</p>
+      <div className="max-w-xl mx-auto py-12 text-center text-slate-500 font-bold text-sm">
+        Loading Delivery Live Location...
       </div>
     );
   }
 
-  if (error || !linkData) {
+  if (!order) {
     return (
-      <div className="max-w-md mx-auto p-6 bg-white rounded-2xl shadow-sm border border-red-100 text-center">
-        <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Delivery Tracker Closed</h2>
-        <p className="text-gray-600 mb-6">{error || "This tracking link does not exist, has expired, or is invalid."}</p>
+      <div className="max-w-md mx-auto p-8 bg-white dark:bg-slate-900 rounded-3xl text-center space-y-4 border border-slate-200 dark:border-slate-800">
+        <AlertCircle className="w-8 h-8 text-rose-500 mx-auto" />
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white">Order Tracking Not Found</h2>
+        <p className="text-xs text-slate-500">Please verify your tracking token or link.</p>
         <button
           onClick={onGoBack}
-          className="w-full bg-gray-900 hover:bg-gray-800 text-white font-semibold py-3 px-4 rounded-xl transition duration-150"
+          className="px-4 py-2 bg-slate-100 dark:bg-slate-800 rounded-xl font-bold text-xs"
         >
-          Return to Dashboard
+          Return Home
         </button>
       </div>
     );
   }
 
-  const isDelivered = linkData.status === "delivered";
-  const isExpired = linkData.status === "expired";
-  const isExpiredOrDelivered = isDelivered || isExpired;
+  const riderLoc: LocationUpdate | null = order.last_lat
+    ? {
+        latitude: order.last_lat,
+        longitude: order.last_lng || 0,
+        heading: order.last_heading,
+        speed: order.last_speed,
+        timestamp: order.last_updated || new Date().toISOString(),
+      }
+    : null;
 
-  // Haversine formula to compute distance in meters
-  const getHaversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3; // Earth radius in meters
-    const phi1 = (lat1 * Math.PI) / 180;
-    const phi2 = (lat2 * Math.PI) / 180;
-    const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
-    const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
-
-    const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-              Math.cos(phi1) * Math.cos(phi2) *
-              Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
-  };
-
-  // Calculate distance and ETA (Estimated Arrival)
-  let distanceMeters: number | null = null;
-  let etaMinutes: number | null = null;
-  let progressPercent = 0;
-
-  if (location && destinationCoords) {
-    distanceMeters = getHaversineDistance(
-      location.latitude,
-      location.longitude,
-      destinationCoords[0],
-      destinationCoords[1]
-    );
-
-    // Speed: 25 km/h = 25000 meters / 3600 seconds = 6.94 m/s
-    const speedMps = 25000 / 3600;
-    // Add routing factor of 1.3 to account for winding city streets
-    const routingFactor = 1.3;
-    const travelTimeSeconds = (distanceMeters * routingFactor) / speedMps;
-    etaMinutes = Math.max(1, Math.round(travelTimeSeconds / 60));
-
-    if (distanceMeters < 50) {
-      progressPercent = 100;
-    } else {
-      // Map 5km (or more) to 10% progress and 50m to 100% progress
-      progressPercent = Math.max(10, Math.min(100, Math.round(100 - (distanceMeters / 5000) * 90)));
-    }
-  }
-
-  // Format last updated text
-  const formatLastUpdated = () => {
-    if (secondsSinceUpdate === null) return "Waiting for rider to start location sharing...";
-    if (secondsSinceUpdate < 10) return "Just now";
-    if (secondsSinceUpdate < 60) return `${secondsSinceUpdate} seconds ago`;
-    const mins = Math.floor(secondsSinceUpdate / 60);
-    if (mins === 1) return "1 minute ago";
-    return `${mins} minutes ago`;
+  const destLoc = {
+    lat: order.destination_lat || 1.3521,
+    lng: order.destination_lng || 103.8198,
   };
 
   return (
-    <div className="max-w-md mx-auto bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800/80 shadow-sm overflow-hidden font-sans transition-colors duration-200">
-      {/* Header section */}
-      <div className="p-6 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800/80 flex items-start justify-between transition-colors duration-200">
-        <div>
-          <span className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 tracking-wider uppercase font-display bg-slate-200/60 dark:bg-slate-800 px-2.5 py-1 rounded-full">
-            Customer Tracker
-          </span>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white font-display mt-2">Order {linkData.order_id}</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Delivery Rider: <span className="font-semibold text-slate-700 dark:text-slate-300">{linkData.rider_id}</span></p>
-          {linkData.address && (
-            <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1.5 flex items-start gap-1">
-              <span className="font-bold shrink-0">To:</span>
-              <span>{linkData.address}</span>
-            </p>
-          )}
-        </div>
-        <button onClick={onGoBack} className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-semibold underline shrink-0">
-          Dashboard
+    <div className="max-w-4xl mx-auto px-4 space-y-6">
+      {/* Back Button Header */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onGoBack}
+          className="text-xs text-slate-500 hover:text-slate-900 dark:hover:text-white font-semibold flex items-center gap-1 transition"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Back to Landing Page</span>
         </button>
+
+        <span className="px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 font-bold text-xs uppercase">
+          Live Customer View
+        </span>
       </div>
 
-      {/* Main active live panel */}
-      {isExpiredOrDelivered ? (
-        <div className="p-8 text-center bg-emerald-50/20 dark:bg-slate-900">
-          <CheckCircle className={`w-16 h-16 mx-auto mb-4 ${isDelivered ? "text-emerald-500" : "text-amber-500"}`} />
-          <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
-            {isDelivered ? "This delivery is complete." : "Delivery Link Expired"}
-          </h3>
-          <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto mb-6">
-            {isDelivered 
-              ? "This delivery session is marked complete. Thank you for using Rider Location Tracker!" 
-              : "This 3-hour live location link has expired for security reasons."}
-          </p>
-          <div className="border-t border-slate-100 dark:border-slate-800/80 pt-6">
-            <button
-              onClick={onGoBack}
-              className="w-full bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white font-semibold py-3 px-4 rounded-xl transition duration-150"
-            >
-              Return to Dashboard
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col">
-          {/* Live map viewport */}
-          <div className="relative">
-            {location ? (
-              <MapComponent 
-                location={location} 
-                status={linkData.status} 
-                destinationAddress={linkData.address}
-                destinationCoords={destinationCoords}
-              />
-            ) : (
-              <div className="w-full h-[300px] bg-slate-100 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center transition-colors duration-200">
-                <MapPin className="w-10 h-10 text-slate-400 dark:text-slate-600 animate-bounce mb-3" />
-                <h4 className="text-base font-bold text-slate-700 dark:text-slate-300">Waiting for Rider</h4>
-                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mt-1">
-                  The rider has received your link but hasn't activated their GPS sharing yet. Keep this window open, it will connect automatically.
-                </p>
-              </div>
-            )}
-
-            {/* SSE Live Connection state pill */}
-            <div className="absolute bottom-4 left-4 z-20 bg-slate-950/90 text-white backdrop-blur text-[11px] font-medium px-3 py-1.5 rounded-full flex items-center gap-2 border border-slate-800">
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                connectionState === "live" ? "bg-emerald-400 animate-pulse" :
-                connectionState === "connecting" ? "bg-amber-400 animate-ping" : "bg-rose-400"
-              }`} />
-              <span>
-                {connectionState === "live" && "Connected to Rider Live Stream"}
-                {connectionState === "connecting" && "Re-establishing connection..."}
-                {connectionState === "offline" && "Lost connection. Reconnecting..."}
+      {/* Main Order Card */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-200/80 dark:border-slate-800 space-y-6 shadow-sm">
+        {/* Status Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="p-2 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                <Truck className="w-5 h-5" />
               </span>
+              <div>
+                <h1 className="text-xl font-bold text-slate-900 dark:text-white font-display">
+                  Delivery for {order.customer_name}
+                </h1>
+                <p className="text-xs text-slate-500 font-mono">Token: {order.customer_token}</p>
+              </div>
             </div>
           </div>
 
-          {/* Delivery progress details and action button */}
-          <div className="p-6 space-y-6">
-            {/* Estimated Arrival Card */}
-            {location && destinationCoords && distanceMeters !== null && etaMinutes !== null && (
-              <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-100/10 dark:shadow-none space-y-4">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className="text-[10px] font-bold tracking-wider uppercase opacity-85 bg-white/20 px-2.5 py-0.5 rounded-full">
-                      Estimated Arrival
-                    </span>
-                    <h3 className="text-3xl font-extrabold mt-2 tracking-tight">
-                      {distanceMeters < 50 ? (
-                        "Arriving Now"
-                      ) : (
-                        <>
-                          ~ {etaMinutes} <span className="text-lg font-semibold">min</span>
-                        </>
-                      )}
-                    </h3>
-                  </div>
-                  <div className="p-2.5 bg-white/10 rounded-xl">
-                    <Navigation className="w-5 h-5 text-white rotate-45 animate-pulse" />
-                  </div>
-                </div>
-
-                <div className="space-y-2 pt-1">
-                  <div className="flex justify-between text-xs font-semibold opacity-90">
-                    <span>
-                      {distanceMeters < 100 ? (
-                        "At your location"
-                      ) : distanceMeters < 1000 ? (
-                        `${Math.round(distanceMeters)}m remaining`
-                      ) : (
-                        `${(distanceMeters / 1000).toFixed(1)} km remaining`
-                      )}
-                    </span>
-                    <span className="opacity-75">25 km/h avg speed</span>
-                  </div>
-                  <div className="h-1.5 w-full bg-white/25 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-white rounded-full transition-all duration-500 ease-out"
-                      style={{ width: `${progressPercent}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Live details info card */}
-            <div className="flex gap-4 p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/60 dark:border-indigo-900/30 font-sans transition-colors duration-200">
-              <Clock className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-              <div>
-                <h4 className="text-sm font-bold text-indigo-950 dark:text-indigo-200">Rider Position</h4>
-                <p className="text-xs text-indigo-700/80 dark:text-indigo-300 mt-1 font-medium flex items-center gap-1.5">
-                  <Signal className="w-3 h-3 text-indigo-500 dark:text-indigo-400" />
-                  {formatLastUpdated()}
-                </p>
-              </div>
-            </div>
-
-            {/* Offline warning if connection drops */}
-            {secondsSinceUpdate !== null && secondsSinceUpdate > 60 && (
-              <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40 rounded-2xl flex gap-3 items-start transition-colors duration-200">
-                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <div>
-                  <h5 className="text-sm font-bold text-amber-900 dark:text-amber-200">Rider Connection Idle</h5>
-                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                    No GPS signal received from the rider for over a minute. They might have locked their phone or have poor reception. We are still monitoring and displaying their last known location!
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* Main Action Button */}
-            <div className="border-t border-slate-100 dark:border-slate-800/80 pt-6 transition-colors duration-200">
-              <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-3 text-center">Has your order arrived?</h4>
-              <button
-                onClick={handleMarkDelivered}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3.5 px-4 rounded-2xl transition duration-150 shadow-md shadow-emerald-100/10 dark:shadow-none flex items-center justify-center gap-2"
-              >
-                <CheckCircle className="w-5 h-5" />
-                Yes, Received
-              </button>
-            </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`px-3 py-1.5 rounded-xl font-bold text-xs uppercase tracking-wider ${
+                order.status === "delivered"
+                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                  : "bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 animate-pulse"
+              }`}
+            >
+              {order.status === "delivered" ? "Delivered" : "Rider In Transit"}
+            </span>
           </div>
         </div>
-      )}
+
+        {/* Info Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+          <div className="p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl space-y-1 border border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300">
+              <Building className="w-4 h-4 text-indigo-500" />
+              <span>Destination Address</span>
+            </div>
+            <p className="text-slate-600 dark:text-slate-400 font-medium">{order.customer_address}</p>
+          </div>
+
+          <div className="p-4 bg-slate-50 dark:bg-slate-950 rounded-2xl space-y-1 border border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300">
+              <Truck className="w-4 h-4 text-indigo-500" />
+              <span>Assigned Driver</span>
+            </div>
+            <p className="text-slate-600 dark:text-slate-400 font-medium">
+              {order.rider_name || "Assigned Driver"} ({order.rider_phone || "Phone hidden"})
+            </p>
+          </div>
+        </div>
+
+        {/* Live Interactive Map */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+            <span>Rider Live GPS Map</span>
+            <span className="text-slate-400 font-normal">
+              Last updated: {order.last_updated ? new Date(order.last_updated).toLocaleTimeString() : "Awaiting signal"}
+            </span>
+          </div>
+
+          <MapComponent
+            riderLocation={riderLoc}
+            destinationLocation={destLoc}
+            locationHistory={order.location_history || []}
+            height="360px"
+          />
+        </div>
+      </div>
     </div>
   );
 }

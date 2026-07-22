@@ -1,22 +1,28 @@
 export interface LocationUpdate {
-  order_id: string;
   latitude: number;
   longitude: number;
-  updated_at: string;
+  heading?: number | null;
+  speed?: number | null;
+  timestamp: string;
 }
 
-export interface TrackingLink {
+export interface Order {
   id: string;
-  token: string;
-  customer_token?: string;
-  order_id: string;
-  rider_id: string;
-  customer_id: string;
-  address: string;
-  status: 'active' | 'delivered' | 'expired' | 'sos_alert';
-  sos_alert?: boolean;
-  sos_timestamp?: string;
-  created_at: string;
-  expires_at: string;
-  location?: LocationUpdate | null;
+  customer_token: string;
+  rider_token: string;
+  status: 'assigned' | 'in_transit' | 'delivered' | 'cancelled';
+  customer_name?: string;
+  customer_address?: string;
+  customer_phone?: string;
+  rider_name?: string;
+  rider_phone?: string;
+  destination_lat?: number;
+  destination_lng?: number;
+  last_lat?: number;
+  last_lng?: number;
+  last_heading?: number;
+  last_speed?: number;
+  last_updated?: string;
+  location_history?: LocationUpdate[];
+  created_at?: string;
 }

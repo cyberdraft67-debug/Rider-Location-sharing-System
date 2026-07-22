@@ -1,6 +1,6 @@
 {
-  "name": "Rider Location Tracker",
-  "description": "A delivery rider location-sharing system with live mapping, GPS updates, and order progress tracking.",
+  "name": "RoutePulse Tracking Service",
+  "description": "Real-time GPS rider location sharing system and dispatch admin portal.",
   "requestFramePermissions": [
     "geolocation"
   ],

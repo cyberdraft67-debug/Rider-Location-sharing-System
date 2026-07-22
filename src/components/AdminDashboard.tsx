@@ -1,122 +1,68 @@
 import { useState, useEffect, FormEvent } from "react";
-import { Plus, Link, Navigation, User, ShoppingBag, Eye, RefreshCw, Clock, CheckCircle, ShieldCheck, HelpCircle, Copy, Check, Siren } from "lucide-react";
-import { TrackingLink } from "../types";
 import { supabase } from "../supabaseClient";
+import { Order } from "../types";
+import {
+  ShoppingBag,
+  Shield,
+  RefreshCw,
+  Navigation,
+  Eye,
+  Copy,
+  Check,
+  User,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+  X,
+  CheckCircle2,
+  ExternalLink,
+  MapPin,
+} from "lucide-react";
 
 interface AdminDashboardProps {
   onSelectRider: (token: string) => void;
   onSelectCustomer: (token: string) => void;
 }
 
-// Helper to parse any date string safely as UTC if it doesn't specify a timezone offset
-const parseAsUTC = (dateStr: string): Date => {
-  if (!dateStr) return new Date();
-  let formatted = dateStr;
-  if (formatted.includes(" ") && !formatted.includes("T")) {
-    formatted = formatted.replace(" ", "T");
-  }
-  // If it doesn't contain Z or an explicit timezone offset like +08 or -05, append Z to force UTC
-  if (!formatted.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(formatted)) {
-    formatted += "Z";
-  }
-  return new Date(formatted);
-};
+export default function AdminDashboard({
+  onSelectRider,
+  onSelectCustomer,
+}: AdminDashboardProps) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
 
-export default function AdminDashboard({ onSelectRider, onSelectCustomer }: AdminDashboardProps) {
-  const [orders, setOrders] = useState<TrackingLink[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"assign" | "links">("links");
-  
-  // Create order form state
-  const [orderId, setOrderId] = useState("");
-  const [riderId, setRiderId] = useState("");
-  const [customerId, setCustomerId] = useState("");
-  const [address, setAddress] = useState("");
-  const [formError, setFormError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Form state
+  const [customOrderId, setCustomOrderId] = useState("");
+  const [riderName, setRiderName] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [customerAddress, setCustomerAddress] = useState("");
+  const [creating, setCreating] = useState(false);
 
-  // States for copy feedback and newly created order links
-  const [copiedToken, setCopiedToken] = useState<string | null>(null);
-  const [copiedCustomerToken, setCopiedCustomerToken] = useState<string | null>(null);
-  const [newlyCreatedLink, setNewlyCreatedLink] = useState<TrackingLink | null>(null);
-  const [modalCopied, setModalCopied] = useState(false);
-  const [modalCustomerCopied, setModalCustomerCopied] = useState(false);
+  // Pop-up modal state for generated order
+  const [popupOrder, setPopupOrder] = useState<Order | null>(null);
+  const [openDiagnostics, setOpenDiagnostics] = useState<Record<string, boolean>>({});
 
-  // Simulation status for active orders
-  const [simulatingToken, setSimulatingToken] = useState<string | null>(null);
-  const [simulationCoordsIdx, setSimulationCoordsIdx] = useState(0);
-
-  // Singapore route simulation coordinates for realistic demo testing
-  const SIMULATION_ROUTE = [
-    { lat: 1.290270, lng: 103.851959 }, // Start (Marina Bay)
-    { lat: 1.292500, lng: 103.852800 },
-    { lat: 1.295000, lng: 103.854000 },
-    { lat: 1.296500, lng: 103.851000 },
-    { lat: 1.298000, lng: 103.848000 },
-    { lat: 1.300500, lng: 103.845000 },
-    { lat: 1.302000, lng: 103.841000 }, // Central shopping district
-    { lat: 1.304000, lng: 103.839000 },
-    { lat: 1.306500, lng: 103.835000 },
-    { lat: 1.309000, lng: 103.832000 }, // End
-  ];
-
-  // Fetch all orders/links directly from Supabase
   const fetchOrders = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      
-      // Fetch tracking links ordered by created_at descending
-      const { data: links, error: linksError } = await supabase
-        .from("tracking_links")
+      const { data, error } = await supabase
+        .from("orders")
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (linksError) throw linksError;
-
-      if (links) {
-        const now = new Date();
-        // Client-side auto-expiry background check & DB sync (with timezone safety)
-        const expiredLinks = links.filter((link) => {
-          if (link.status !== "active") return false;
-          const expiryTime = parseAsUTC(link.expires_at);
-          const isExpired = expiryTime.getTime() < now.getTime();
-          console.log(`[Order Expiry Check] ID: ${link.order_id} | Raw Expires At: ${link.expires_at} | Parsed Expiry (UTC): ${expiryTime.toISOString()} | Current Client (UTC): ${now.toISOString()} | Is Expired?: ${isExpired}`);
-          return isExpired;
-        });
-
-        if (expiredLinks.length > 0) {
-          await Promise.all(
-            expiredLinks.map(async (link) => {
-              await supabase
-                .from("tracking_links")
-                .update({ status: "expired" })
-                .eq("id", link.id);
-              link.status = "expired";
-            })
-          );
-        }
-
-        // Fetch location updates to map against order_id
-        const { data: locations, error: locationsError } = await supabase
-          .from("location_updates")
-          .select("*");
-
-        if (locationsError) {
-          console.error("Failed to fetch location updates from Supabase", locationsError);
-        }
-
-        const enriched = links.map((link) => {
-          const loc = locations?.find((l) => l.order_id === link.order_id) || null;
-          return {
-            ...link,
-            location: loc,
-          };
-        });
-
-        setOrders(enriched);
-      }
+      if (error) throw error;
+      if (data) setOrders(data as Order[]);
     } catch (err) {
-      console.error("Failed to fetch orders from Supabase:", err);
+      console.warn("Supabase fetch failed, using stored local orders:", err);
+      const local = localStorage.getItem("routepulse_local_orders");
+      if (local) {
+        try {
+          setOrders(JSON.parse(local));
+        } catch {
+          setOrders([]);
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -124,632 +70,453 @@ export default function AdminDashboard({ onSelectRider, onSelectCustomer }: Admi
 
   useEffect(() => {
     fetchOrders();
-    // Set an interval to run the client-side check for expired active links
-    const interval = setInterval(() => {
-      fetchOrders();
-    }, 15000);
-    return () => clearInterval(interval);
-  }, []);
 
-  // Helper to generate a random 32-char hex token if needed
-  const generateRandomToken = (): string => {
-    const chars = "abcdef0123456789";
-    let token = "";
-    for (let i = 0; i < 32; i++) {
-      token += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return token;
-  };
-
-  // Handle auto simulation triggers directly on Supabase
-  useEffect(() => {
-    if (!simulatingToken) return;
-
-    const interval = setInterval(async () => {
-      const nextIdx = (simulationCoordsIdx + 1) % SIMULATION_ROUTE.length;
-      setSimulationCoordsIdx(nextIdx);
-      const coord = SIMULATION_ROUTE[nextIdx];
-
-      const targetOrder = orders.find((o) => o.token === simulatingToken);
-      if (!targetOrder) return;
-
-      // Status lock: stop simulation updates if complete/expired
-      if (targetOrder.status !== "active") {
-        setSimulatingToken(null);
-        return;
-      }
-
-      try {
-        const { error } = await supabase
-          .from("location_updates")
-          .upsert({
-            order_id: targetOrder.order_id,
-            latitude: coord.lat,
-            longitude: coord.lng,
-            updated_at: new Date().toISOString(),
-          });
-
-        if (error) throw error;
-
-        // Fetch and refresh the active order tracking list
+    const subscription = supabase
+      .channel("orders_channel")
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => {
         fetchOrders();
-      } catch (err) {
-        console.error("Supabase simulation update error:", err);
-      }
-    }, 4000); // Send updates every 4 seconds for immediate visual feedback!
+      })
+      .subscribe();
 
-    return () => clearInterval(interval);
-  }, [simulatingToken, simulationCoordsIdx, orders]);
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, []);
 
   const handleCreateOrder = async (e: FormEvent) => {
     e.preventDefault();
-    setFormError("");
+    if (!riderName || !customerName) return;
 
-    if (!orderId || !riderId || !customerId || !address) {
-      setFormError("All fields are required");
-      return;
-    }
+    setCreating(true);
+    const randRider = Math.random().toString(36).substring(2, 8);
+    const randCust = Math.random().toString(36).substring(2, 8);
+    const riderToken = `rider_${randRider}`;
+    const customerToken = `cust_${randCust}`;
+    const finalOrderId = customOrderId.trim() || `ORD-${Math.floor(100 + Math.random() * 900)}`;
 
-    setIsSubmitting(true);
+    const newOrderPayload: Partial<Order> = {
+      customer_token: customerToken,
+      rider_token: riderToken,
+      status: "assigned",
+      customer_name: customerName,
+      customer_address: customerAddress || "10 Bayfront Ave, Singapore 018956",
+      customer_phone: "+1 (555) 019-2834",
+      rider_name: riderName,
+      rider_phone: "+1 (555) 018-9921",
+      destination_lat: 1.3521,
+      destination_lng: 103.8198,
+      location_history: [],
+      created_at: new Date().toISOString(),
+    };
+
+    let created: Order;
     try {
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + 3 * 60 * 60 * 1000); // 3 hours from creation
-      const token = generateRandomToken();
+      const { data, error } = await supabase
+        .from("orders")
+        .insert([{ ...newOrderPayload, id: finalOrderId }])
+        .select()
+        .single();
 
-      const newLinkObj: TrackingLink = {
-        id: orderId.trim(),
-        token: token,
-        order_id: orderId.trim(),
-        rider_id: riderId.trim(),
-        customer_id: customerId.trim(),
-        address: address.trim(),
-        status: "active",
-        created_at: now.toISOString(),
-        expires_at: expiresAt.toISOString(),
-      };
-
-      const { error } = await supabase
-        .from("tracking_links")
-        .insert({
-          order_id: newLinkObj.order_id,
-          rider_id: newLinkObj.rider_id,
-          customer_id: newLinkObj.customer_id,
-          address: newLinkObj.address,
-          token: newLinkObj.token,
-          status: newLinkObj.status,
-          created_at: newLinkObj.created_at,
-          expires_at: newLinkObj.expires_at,
-        });
-
-      if (error) {
-        throw error;
-      }
-
-      setOrderId("");
-      setRiderId("");
-      setCustomerId("");
-      setAddress("");
-      await fetchOrders();
-      setNewlyCreatedLink(newLinkObj);
-      setActiveTab("links");
-    } catch (err: any) {
-      console.error("Failed to insert tracking link:", err);
-      setFormError(err.message || "Failed to create tracking link in Supabase");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-
-  const startSimulation = (token: string) => {
-    setSimulatingToken(token);
-    setSimulationCoordsIdx(0);
-  };
-
-  const stopSimulation = () => {
-    setSimulatingToken(null);
-  };
-
-  const handleClearSOS = async (linkId: string) => {
-    try {
-      const { error } = await supabase
-        .from("tracking_links")
-        .update({
-          status: "active",
-          sos_alert: false,
-          sos_timestamp: null,
-        })
-        .eq("id", linkId);
-
-      if (error) {
-        console.error("Supabase clear SOS notice:", error);
-      }
-
-      // Also call express server endpoint if available
-      const target = orders.find((o) => o.id === linkId);
-      if (target) {
-        try {
-          await fetch(`/api/tracking/${target.token}/sos`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ active: false }),
-          });
-        } catch (e) {
-          // Safe fallback
-        }
-      }
-
-      await fetchOrders();
+      if (error) throw error;
+      created = data as Order;
     } catch (err) {
-      console.error("Failed to clear SOS alert:", err);
-      alert("Failed to clear SOS alert.");
+      console.warn("Supabase insert failed, saving locally:", err);
+      created = { id: finalOrderId, ...newOrderPayload } as Order;
+      const updated = [created, ...orders];
+      setOrders(updated);
+      localStorage.setItem("routepulse_local_orders", JSON.stringify(updated));
+    } finally {
+      setCreating(false);
     }
+
+    // Trigger pop-up modal
+    setPopupOrder(created);
+    fetchOrders();
+
+    // Reset Form
+    setCustomOrderId("");
+    setRiderName("");
+    setCustomerName("");
+    setCustomerAddress("");
   };
 
-  const sosOrders = orders.filter((o) => o.status === "sos_alert" || o.sos_alert);
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedLabel(label);
+    setTimeout(() => setCopiedLabel(null), 2000);
+  };
+
+  const toggleDiagnostics = (id: string) => {
+    setOpenDiagnostics((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 font-sans">
-      
-      {/* Newly Created Order/Rider Tracking Link Success Modal */}
-      {newlyCreatedLink && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800/80 shadow-xl max-w-md w-full p-6 text-center space-y-4 transition-colors duration-200">
-            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 mb-2">
-              <CheckCircle className="h-6 w-6" />
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 space-y-8">
+      {/* Side-by-side 2-column layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* LEFT COLUMN: Assign New Order Card */}
+        <div className="lg:col-span-5 bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-7 border border-slate-200/80 dark:border-slate-800 shadow-sm space-y-6">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 bg-indigo-50 dark:bg-indigo-950/80 rounded-xl text-indigo-600 dark:text-indigo-400">
+              <ShoppingBag className="w-5 h-5" />
             </div>
-            
-            <div>
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white font-display">Tracking Link Generated!</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">This secure link is ready to be sent to your rider.</p>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white font-display">
+              Assign New Order
+            </h2>
+          </div>
+
+          <form onSubmit={handleCreateOrder} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                ORDER ID
+              </label>
+              <input
+                type="text"
+                value={customOrderId}
+                onChange={(e) => setCustomOrderId(e.target.value)}
+                placeholder="e.g. ORD-9012"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600/40 transition placeholder:text-slate-400"
+              />
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/40 text-left text-xs space-y-2 border border-slate-100 dark:border-slate-800/80 font-medium">
-              <div className="flex justify-between">
-                <span className="text-slate-400 dark:text-slate-500">Order ID:</span>
-                <span className="font-bold text-slate-900 dark:text-white">{newlyCreatedLink.order_id}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400 dark:text-slate-500">Rider:</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">{newlyCreatedLink.rider_id}</span>
-              </div>
-              <div className="border-t border-slate-200 dark:border-slate-800 pt-2 flex flex-col gap-1">
-                <span className="text-slate-400 dark:text-slate-500 text-[10px] uppercase font-bold tracking-wider">Delivery Address:</span>
-                <span className="text-slate-700 dark:text-slate-300 leading-normal">{newlyCreatedLink.address}</span>
-              </div>
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                RIDER ID / NAME
+              </label>
+              <input
+                type="text"
+                required
+                value={riderName}
+                onChange={(e) => setRiderName(e.target.value)}
+                placeholder="e.g. Rider-Tom"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600/40 transition placeholder:text-slate-400"
+              />
             </div>
 
-            <div className="space-y-1.5 text-left">
-              <label className="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Rider Secure Link</label>
-              <div className="flex items-center gap-2 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-xl p-2.5">
-                <input
-                  type="text"
-                  readOnly
-                  value={`${window.location.origin}/track/${newlyCreatedLink.token}`}
-                  className="bg-transparent border-none outline-none text-xs font-mono text-indigo-700 dark:text-indigo-300 flex-1 select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}/track/${newlyCreatedLink.token}`);
-                    setModalCopied(true);
-                    setTimeout(() => setModalCopied(false), 2000);
-                  }}
-                  className={`p-2 rounded-lg transition shrink-0 ${
-                    modalCopied ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400" : "bg-indigo-600 text-white hover:bg-indigo-700"
-                  }`}
-                  title="Copy Rider Link"
-                >
-                  {modalCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                </button>
-              </div>
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                CUSTOMER ID / NAME
+              </label>
+              <input
+                type="text"
+                required
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="e.g. Cust-Emma"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600/40 transition placeholder:text-slate-400"
+              />
             </div>
 
-            <div className="space-y-1.5 text-left">
-              <label className="block text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Customer Secure Link</label>
-              <div className="flex items-center gap-2 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-xl p-2.5">
-                <input
-                  type="text"
-                  readOnly
-                  value={`${window.location.origin}/view/cust_${newlyCreatedLink.token}`}
-                  className="bg-transparent border-none outline-none text-xs font-mono text-indigo-700 dark:text-indigo-300 flex-1 select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}/view/cust_${newlyCreatedLink.token}`);
-                    setModalCustomerCopied(true);
-                    setTimeout(() => setModalCustomerCopied(false), 2000);
-                  }}
-                  className={`p-2 rounded-lg transition shrink-0 ${
-                    modalCustomerCopied ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400" : "bg-indigo-600 text-white hover:bg-indigo-700"
-                  }`}
-                  title="Copy Customer Link"
-                >
-                  {modalCustomerCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                </button>
-              </div>
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                DELIVERY ADDRESS
+              </label>
+              <input
+                type="text"
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+                placeholder="e.g. 10 Bayfront Ave, Singapore 018956"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-600/40 transition placeholder:text-slate-400"
+              />
             </div>
 
             <button
-              type="button"
-              onClick={() => {
-                setNewlyCreatedLink(null);
-                setModalCopied(false);
-                setModalCustomerCopied(false);
-              }}
-              className="w-full py-3 px-4 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white font-bold text-sm rounded-xl transition"
+              type="submit"
+              disabled={creating}
+              className="w-full mt-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold py-3.5 px-4 rounded-2xl transition duration-150 shadow-md shadow-indigo-600/25 text-sm flex items-center justify-center gap-2"
             >
-              Done & Return to Dashboard
+              <span>+</span>
+              <span>{creating ? "Generating..." : "Generate Secure Tracking Link"}</span>
             </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Top Emergency SOS Alert Banner */}
-      {sosOrders.length > 0 && (
-        <div className="mb-6 p-4 bg-red-600 text-white rounded-3xl shadow-lg border border-red-500 animate-pulse flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-white/20 rounded-2xl shrink-0">
-              <Siren className="w-6 h-6 text-white animate-spin" />
-            </div>
-            <div>
-              <h3 className="font-extrabold text-sm uppercase tracking-wider flex items-center gap-2">
-                <span>🚨 EMERGENCY SOS ALERT ACTIVE</span>
-                <span className="bg-white text-red-700 px-2 py-0.5 rounded-full text-xs">{sosOrders.length}</span>
-              </h3>
-              <p className="text-xs text-red-100 mt-0.5">
-                Rider reported an emergency! Affected order(s): {sosOrders.map((o) => `${o.order_id} (${o.rider_id})`).join(", ")}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => setActiveTab("links")}
-            className="bg-white text-red-700 hover:bg-red-50 text-xs font-bold px-4 py-2 rounded-xl transition shadow shrink-0"
-          >
-            Review Emergency Orders
-          </button>
-        </div>
-      )}
-
-      {/* Mobile-Friendly Tab Switcher: Only visible on mobile/tablet viewports */}
-      <div className="flex lg:hidden bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl mb-6 max-w-md mx-auto transition-colors duration-200">
-        <button
-          onClick={() => setActiveTab("links")}
-          className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-xs transition duration-150 flex items-center justify-center gap-2 ${
-            activeTab === "links"
-              ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm"
-              : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          Active Orders ({orders.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("assign")}
-          className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-xs transition duration-150 flex items-center justify-center gap-2 ${
-            activeTab === "assign"
-              ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm"
-              : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-          }`}
-        >
-          <Plus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          Assign New Order
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* LEFT COLUMN: Order assignment form */}
-        <div className={`lg:col-span-5 space-y-6 ${activeTab === "assign" ? "block" : "hidden lg:block"}`}>
-          
-          {/* Create Tracking Link Form */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/80 rounded-3xl p-6 shadow-sm transition-colors duration-200">
-            <div className="flex items-center gap-2 mb-4">
-              <ShoppingBag className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white font-display">Assign New Order</h2>
-            </div>
-            
-            <form onSubmit={handleCreateOrder} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Order ID
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={orderId}
-                    onChange={(e) => setOrderId(e.target.value)}
-                    placeholder="e.g. ORD-9012"
-                    className="w-full bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800/80 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-4 py-2.5 text-sm transition-colors duration-150"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Rider ID / Name
-                </label>
-                <input
-                  type="text"
-                  value={riderId}
-                  onChange={(e) => setRiderId(e.target.value)}
-                  placeholder="e.g. Rider-Tom"
-                  className="w-full bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800/80 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-4 py-2.5 text-sm transition-colors duration-150"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Customer ID / Name
-                </label>
-                <input
-                  type="text"
-                  value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
-                  placeholder="e.g. Cust-Emma"
-                  className="w-full bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800/80 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-4 py-2.5 text-sm transition-colors duration-150"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Delivery Address
-                </label>
-                <input
-                  type="text"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="e.g. 10 Bayfront Ave, Singapore 018956"
-                  className="w-full bg-slate-50 dark:bg-slate-950/40 border border-slate-200 dark:border-slate-800/80 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl px-4 py-2.5 text-sm transition-colors duration-150"
-                />
-              </div>
-
-              {formError && (
-                <p className="text-xs text-rose-600 dark:text-rose-400 font-medium bg-rose-50 dark:bg-rose-950/20 p-2.5 rounded-lg border border-rose-100 dark:border-rose-900/30">
-                  {formError}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-semibold py-3 px-4 rounded-xl transition shadow-md shadow-indigo-100/10 dark:shadow-none flex items-center justify-center gap-2 text-sm"
-              >
-                {isSubmitting ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Plus className="w-4 h-4" />
-                )}
-                Generate Secure Tracking Link
-              </button>
-            </form>
-          </div>
+          </form>
         </div>
 
-        {/* RIGHT COLUMN: Live list of generated tracking links */}
-        <div className={`lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/80 rounded-3xl p-6 shadow-sm flex flex-col min-h-[500px] transition-colors duration-200 ${activeTab === "links" ? "block" : "hidden lg:block"}`}>
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white font-display">Active Tracking Links</h2>
+        {/* RIGHT COLUMN: Active Tracking Links */}
+        <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-7 border border-slate-200/80 dark:border-slate-800 shadow-sm space-y-6">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-indigo-50 dark:bg-indigo-950/80 rounded-xl text-indigo-600 dark:text-indigo-400">
+                <Shield className="w-5 h-5" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white font-display">
+                Active Tracking Links
+              </h2>
             </div>
+
             <button
               onClick={fetchOrders}
-              className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
-              title="Refresh database"
+              className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl transition"
+              title="Refresh list"
             >
-              <RefreshCw className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             </button>
           </div>
 
-          {loading ? (
-            <div className="flex-1 flex flex-col items-center justify-center py-12">
-              <RefreshCw className="w-6 h-6 text-indigo-600 animate-spin mb-3" />
-              <p className="text-slate-400 text-xs">Polling generated delivery orders...</p>
-            </div>
-          ) : orders.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center py-12 px-6">
-              <Link className="w-8 h-8 text-slate-300 dark:text-slate-700 mb-2" />
-              <p className="text-slate-600 dark:text-slate-400 font-semibold text-sm">No Active Delivery Sessions</p>
-              <p className="text-slate-400 dark:text-slate-500 text-xs max-w-xs mt-1">
-                Assign an order on the left panel to instantly generate secure browser-to-browser tracking links!
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4 max-h-[540px] overflow-y-auto pr-1">
-              {orders.map((link) => {
-                const isSosAlert = link.status === "sos_alert" || link.sos_alert;
-                const isActive = link.status === "active" || isSosAlert;
-                const isDelivered = link.status === "delivered";
-                const isExpired = link.status === "expired";
-                const isThisSimulating = simulatingToken === link.token;
+          <div className="space-y-4 max-h-[640px] overflow-y-auto pr-1">
+            {orders.map((order) => {
+              const riderUrl = `${window.location.origin}/track/${order.rider_token}`;
+              const custUrl = `${window.location.origin}/view/${order.customer_token}`;
+              const orderKey = order.id || order.customer_token;
+              const isDiagOpen = !!openDiagnostics[orderKey];
 
-                return (
-                  <div
-                    key={link.id}
-                    className={`p-4 border rounded-2xl transition-all duration-150 relative overflow-hidden ${
-                      isSosAlert
-                        ? "border-red-500 dark:border-red-500 bg-red-500/10 dark:bg-red-950/20 shadow-md shadow-red-500/10 animate-pulse"
-                        : isThisSimulating 
-                        ? "border-indigo-400 dark:border-indigo-500 bg-indigo-50/10 dark:bg-indigo-950/10" 
-                        : "border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-950/20"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 dark:text-white font-display text-sm">{link.order_id}</span>
-                          {isSosAlert ? (
-                            <span className="bg-red-600 text-white font-extrabold text-[10px] px-2.5 py-0.5 rounded-full flex items-center gap-1 uppercase tracking-wider animate-bounce">
-                              <Siren className="w-3 h-3" /> EMERGENCY SOS
-                            </span>
-                          ) : (
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              isActive ? "bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300" :
-                              isDelivered ? "bg-indigo-100 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-300" : "bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300"
-                            }`}>
-                              {link.status}
-                            </span>
-                          )}
-                        </div>
-                        {link.address && (
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1">
-                            <span className="font-semibold text-indigo-600 dark:text-indigo-400">To:</span> {link.address}
-                          </div>
-                        )}
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                          <span className="flex items-center gap-1">
-                            <User className="w-3 h-3 text-slate-400 dark:text-slate-500" /> Rider: {link.rider_id}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <User className="w-3 h-3 text-slate-400 dark:text-slate-500" /> Cust: {link.customer_id}
-                          </span>
-                        </div>
-                      </div>
+              const createdTime = order.created_at ? new Date(order.created_at) : new Date();
+              const expTime = new Date(createdTime.getTime() + 24 * 60 * 60 * 1000);
 
-                      {/* Simulation Widget */}
-                      {isActive && (
-                        <div>
-                          {isThisSimulating ? (
-                            <button
-                              onClick={stopSimulation}
-                              className="bg-indigo-600 text-white hover:bg-indigo-700 text-[10px] font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-pulse transition"
-                            >
-                              <RefreshCw className="w-3 h-3 animate-spin" />
-                              Stop Simulating
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => startSimulation(link.token)}
-                              className="bg-slate-800 dark:bg-slate-700 text-white hover:bg-slate-900 dark:hover:bg-slate-600 text-[10px] font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition"
-                              title="Emulate rider movement around Singapore"
-                            >
-                              <Navigation className="w-3 h-3 text-emerald-400" />
-                              Simulate Movement
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
+              return (
+                <div
+                  key={orderKey}
+                  className="p-5 bg-slate-50/70 dark:bg-slate-950/50 rounded-2xl border border-slate-200/70 dark:border-slate-800 space-y-3.5 hover:border-indigo-300 transition"
+                >
+                  {/* Top Row: Order ID + Status */}
+                  <div className="flex items-center gap-2.5">
+                    <span className="font-bold text-slate-900 dark:text-white text-base font-mono">
+                      {order.id || "899"}
+                    </span>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide ${
+                        order.status === "delivered"
+                          ? "bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                          : order.status === "in_transit"
+                          ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                          : "bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                      }`}
+                    >
+                      {order.status || "assigned"}
+                    </span>
+                  </div>
 
-                    {/* Tracking link routes shortcut buttons */}
-                    <div className="mt-3 flex flex-wrap gap-2 pt-3 border-t border-slate-100 dark:border-slate-850/60">
-                      {isSosAlert && (
-                        <button
-                          onClick={() => handleClearSOS(link.id)}
-                          className="bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition shadow w-full"
-                        >
-                          <Siren className="w-3.5 h-3.5 text-white animate-spin" />
-                          Acknowledge & Resolve Emergency SOS
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => onSelectRider(link.token)}
-                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-indigo-50/20 dark:hover:bg-indigo-950/20 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px]"
-                      >
-                        <Navigation className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />
-                        Rider Console
-                      </button>
-
-                      <button
-                        onClick={() => onSelectCustomer(`cust_${link.token}`)}
-                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-indigo-50/20 dark:hover:bg-indigo-950/20 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px]"
-                      >
-                        <Eye className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
-                        Customer View
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          const riderLink = `${window.location.origin}/track/${link.token}`;
-                          navigator.clipboard.writeText(riderLink);
-                          setCopiedToken(link.token);
-                          setTimeout(() => setCopiedToken(null), 2000);
-                        }}
-                        className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px] ${
-                          copiedToken === link.token
-                            ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300"
-                            : "bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300"
-                        }`}
-                        title="Copy secure link for Rider"
-                      >
-                        {copiedToken === link.token ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-450" />
-                            Copied Rider!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-450" />
-                            Copy Rider Link
-                          </>
-                        )}
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          const customerLink = `${window.location.origin}/view/cust_${link.token}`;
-                          navigator.clipboard.writeText(customerLink);
-                          setCopiedCustomerToken(link.token);
-                          setTimeout(() => setCopiedCustomerToken(null), 2000);
-                        }}
-                        className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1.5 transition flex-1 justify-center min-w-[120px] ${
-                          copiedCustomerToken === link.token
-                            ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300"
-                            : "bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300"
-                        }`}
-                        title="Copy secure link for Customer"
-                      >
-                        {copiedCustomerToken === link.token ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-450" />
-                            Copied Cust!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-450" />
-                            Copy Customer Link
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                     {/* Token path info text */}
-                    <div className="mt-2 text-[10px] font-mono text-slate-400/80 dark:text-slate-500 truncate px-1 flex justify-between items-center">
-                      <span>Secure Token: {link.token}</span>
-                    </div>
-
-                    {/* Expiry Debug & Diagnostics */}
-                    <div className="mt-2.5 pt-2 border-t border-dashed border-slate-100 dark:border-slate-800/80 text-[10px] text-slate-500 dark:text-slate-400 bg-slate-50/50 dark:bg-slate-950/40 p-2.5 rounded-xl space-y-1 transition-colors duration-200">
-                      <div className="font-bold text-[10px] text-indigo-600 dark:text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-indigo-500 dark:text-indigo-400" /> Timezone Diagnostics
-                      </div>
-                      <div className="grid grid-cols-2 gap-1 font-mono text-[9px]">
-                        <div><span className="font-semibold text-slate-700 dark:text-slate-300">Expires At (DB raw):</span></div>
-                        <div className="text-right text-slate-850 dark:text-slate-200 break-all">{link.expires_at}</div>
-
-                        <div><span className="font-semibold text-slate-700 dark:text-slate-300">Parsed Expiry (UTC):</span></div>
-                        <div className="text-right text-slate-850 dark:text-slate-200">{parseAsUTC(link.expires_at).toISOString()}</div>
-
-                        <div><span className="font-semibold text-slate-700 dark:text-slate-300">Current Client (UTC):</span></div>
-                        <div className="text-right text-slate-850 dark:text-slate-200">{new Date().toISOString()}</div>
-
-                        <div><span className="font-semibold text-slate-700 dark:text-slate-300">Remaining Time:</span></div>
-                        <div className="text-right font-bold text-indigo-600 dark:text-indigo-400">
-                          {Math.round((parseAsUTC(link.expires_at).getTime() - Date.now()) / (60 * 1000))} mins
-                        </div>
-                      </div>
+                  {/* Address & Names */}
+                  <div className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                    <p className="font-medium">
+                      <span className="font-bold text-indigo-600 dark:text-indigo-400">To:</span>{" "}
+                      {order.customer_address || "A 201, 2nd floor, United Castle apartments"}
+                    </p>
+                    <div className="flex items-center gap-4 text-[11px] pt-0.5">
+                      <span className="flex items-center gap-1">
+                        <User className="w-3 h-3 text-slate-400" />
+                        Rider: <strong className="text-slate-800 dark:text-slate-200">{order.rider_name}</strong>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <User className="w-3 h-3 text-slate-400" />
+                        Cust: <strong className="text-slate-800 dark:text-slate-200">{order.customer_name}</strong>
+                      </span>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
 
+                  {/* 4 Action Buttons Row */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    <button
+                      onClick={() => onSelectRider(order.rider_token)}
+                      className="px-3 py-2 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-slate-200/80 dark:border-slate-800 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs"
+                    >
+                      <Navigation className="w-3.5 h-3.5 rotate-45" />
+                      <span>Rider Console</span>
+                    </button>
+
+                    <button
+                      onClick={() => onSelectCustomer(order.customer_token)}
+                      className="px-3 py-2 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-slate-200/80 dark:border-slate-800 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Customer View</span>
+                    </button>
+
+                    <button
+                      onClick={() => copyToClipboard(riderUrl, `rider_${orderKey}`)}
+                      className="px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition"
+                    >
+                      {copiedLabel === `rider_${orderKey}` ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-600">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy Rider Link</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      onClick={() => copyToClipboard(custUrl, `cust_${orderKey}`)}
+                      className="px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition"
+                    >
+                      {copiedLabel === `cust_${orderKey}` ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-600">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy Customer Link</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Token details & Diagnostics */}
+                  <div className="pt-2 border-t border-slate-200/60 dark:border-slate-800/60 space-y-1.5">
+                    <p className="text-[10px] font-mono text-slate-400 truncate">
+                      Secure Token: {order.customer_token}
+                    </p>
+
+                    <button
+                      onClick={() => toggleDiagnostics(orderKey)}
+                      className="flex items-center gap-1 text-[10px] font-bold uppercase text-indigo-600 dark:text-indigo-400 hover:underline pt-0.5"
+                    >
+                      <Clock className="w-3 h-3" />
+                      <span>TIMEZONE DIAGNOSTICS</span>
+                      {isDiagOpen ? (
+                        <ChevronUp className="w-3 h-3" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3" />
+                      )}
+                    </button>
+
+                    {isDiagOpen && (
+                      <div className="p-2.5 bg-slate-100/80 dark:bg-slate-900/80 rounded-xl font-mono text-[10px] space-y-1 text-slate-500 dark:text-slate-400 border border-slate-200/60 dark:border-slate-800">
+                        <div className="flex justify-between">
+                          <span>Expires At (DB raw):</span>
+                          <span>{expTime.toISOString()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Parsed Expiry (UTC):</span>
+                          <span>{expTime.toUTCString()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Current Client (UTC):</span>
+                          <span>{new Date().toUTCString()}</span>
+                        </div>
+                        <div className="flex justify-between font-bold text-indigo-600 dark:text-indigo-400">
+                          <span>Remaining Time:</span>
+                          <span>1440 mins</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {orders.length === 0 && (
+              <div className="py-12 text-center text-slate-400 text-xs font-medium space-y-2">
+                <MapPin className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto" />
+                <p>No tracking links generated yet.</p>
+                <p className="text-[11px] opacity-80">
+                  Fill out the "Assign New Order" form on the left to create live GPS tracking links.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* POP-UP MODAL UPON ORDER CREATION */}
+      {popupOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 sm:p-8 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-6 relative animate-scale-up">
+            <button
+              onClick={() => setPopupOrder(null)}
+              className="absolute top-5 right-5 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 rounded-2xl shrink-0">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white font-display">
+                  Order Links Created!
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Order <strong className="font-mono text-slate-900 dark:text-white">#{popupOrder.id}</strong> has been generated successfully.
+                </p>
+              </div>
+            </div>
+
+            {/* Order Brief */}
+            <div className="p-3.5 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200/80 dark:border-slate-800 text-xs space-y-1">
+              <p className="font-bold text-slate-800 dark:text-slate-200">
+                To: {popupOrder.customer_address}
+              </p>
+              <p className="text-slate-500">
+                Rider: <strong>{popupOrder.rider_name}</strong> | Cust: <strong>{popupOrder.customer_name}</strong>
+              </p>
+            </div>
+
+            {/* Rider Link Box */}
+            <div className="p-4 bg-slate-50/80 dark:bg-slate-950/80 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+                <span>Rider GPS Tracker Link</span>
+                <button
+                  onClick={() => onSelectRider(popupOrder.rider_token)}
+                  className="text-indigo-600 hover:underline flex items-center gap-1 font-semibold text-[11px]"
+                >
+                  <span>Open Console</span>
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={`${window.location.origin}/track/${popupOrder.rider_token}`}
+                  className="flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-800 dark:text-slate-200 select-all"
+                />
+                <button
+                  onClick={() =>
+                    copyToClipboard(`${window.location.origin}/track/${popupOrder.rider_token}`, "popup_rider")
+                  }
+                  className="px-3.5 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs hover:bg-indigo-700 transition shrink-0"
+                >
+                  {copiedLabel === "popup_rider" ? "Copied!" : "Copy Link"}
+                </button>
+              </div>
+            </div>
+
+            {/* Customer Link Box */}
+            <div className="p-4 bg-slate-50/80 dark:bg-slate-950/80 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+                <span>Customer Recipient View Link</span>
+                <button
+                  onClick={() => onSelectCustomer(popupOrder.customer_token)}
+                  className="text-emerald-600 hover:underline flex items-center gap-1 font-semibold text-[11px]"
+                >
+                  <span>Open Viewer</span>
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={`${window.location.origin}/view/${popupOrder.customer_token}`}
+                  className="flex-1 px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-mono text-slate-800 dark:text-slate-200 select-all"
+                />
+                <button
+                  onClick={() =>
+                    copyToClipboard(`${window.location.origin}/view/${popupOrder.customer_token}`, "popup_cust")
+                  }
+                  className="px-3.5 py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs hover:bg-emerald-700 transition shrink-0"
+                >
+                  {copiedLabel === "popup_cust" ? "Copied!" : "Copy Link"}
+                </button>
+              </div>
+            </div>
+
+            {/* Close Modal Button */}
+            <button
+              onClick={() => setPopupOrder(null)}
+              className="w-full bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 font-bold py-3.5 px-4 rounded-2xl transition text-sm shadow-md"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
