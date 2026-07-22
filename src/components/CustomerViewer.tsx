@@ -353,43 +353,43 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
   };
 
   return (
-    <div className="max-w-md mx-auto bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden font-sans">
+    <div className="max-w-md mx-auto bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800/80 shadow-sm overflow-hidden font-sans transition-colors duration-200">
       {/* Header section */}
-      <div className="p-6 bg-gray-50 border-b border-gray-100 flex items-start justify-between">
+      <div className="p-6 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800/80 flex items-start justify-between transition-colors duration-200">
         <div>
-          <span className="text-xs font-bold text-gray-500 tracking-wider uppercase font-display bg-gray-200/60 px-2.5 py-1 rounded-full">
+          <span className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 tracking-wider uppercase font-display bg-slate-200/60 dark:bg-slate-800 px-2.5 py-1 rounded-full">
             Customer Tracker
           </span>
-          <h2 className="text-2xl font-bold text-gray-900 font-display mt-2">Order {linkData.order_id}</h2>
-          <p className="text-xs text-gray-500 mt-1">Delivery Rider: <span className="font-semibold text-gray-700">{linkData.rider_id}</span></p>
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-white font-display mt-2">Order {linkData.order_id}</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Delivery Rider: <span className="font-semibold text-slate-700 dark:text-slate-300">{linkData.rider_id}</span></p>
           {linkData.address && (
-            <p className="text-xs text-indigo-600 font-medium mt-1.5 flex items-start gap-1">
+            <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1.5 flex items-start gap-1">
               <span className="font-bold shrink-0">To:</span>
               <span>{linkData.address}</span>
             </p>
           )}
         </div>
-        <button onClick={onGoBack} className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold underline shrink-0">
+        <button onClick={onGoBack} className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-semibold underline shrink-0">
           Dashboard
         </button>
       </div>
 
       {/* Main active live panel */}
       {isExpiredOrDelivered ? (
-        <div className="p-8 text-center bg-emerald-50/20">
+        <div className="p-8 text-center bg-emerald-50/20 dark:bg-slate-900">
           <CheckCircle className={`w-16 h-16 mx-auto mb-4 ${isDelivered ? "text-emerald-500" : "text-amber-500"}`} />
-          <h3 className="text-xl font-bold text-gray-800 mb-2">
+          <h3 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-2">
             {isDelivered ? "This delivery is complete." : "Delivery Link Expired"}
           </h3>
-          <p className="text-gray-500 text-sm max-w-xs mx-auto mb-6">
+          <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto mb-6">
             {isDelivered 
               ? "This delivery session is marked complete. Thank you for using Rider Location Tracker!" 
               : "This 3-hour live location link has expired for security reasons."}
           </p>
-          <div className="border-t border-gray-100 pt-6">
+          <div className="border-t border-slate-100 dark:border-slate-800/80 pt-6">
             <button
               onClick={onGoBack}
-              className="w-full bg-gray-900 hover:bg-gray-800 text-white font-semibold py-3 px-4 rounded-xl transition duration-150"
+              className="w-full bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white font-semibold py-3 px-4 rounded-xl transition duration-150"
             >
               Return to Dashboard
             </button>
@@ -407,17 +407,17 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
                 destinationCoords={destinationCoords}
               />
             ) : (
-              <div className="w-full h-[300px] bg-slate-100 flex flex-col items-center justify-center p-6 text-center">
-                <MapPin className="w-10 h-10 text-gray-400 animate-bounce mb-3" />
-                <h4 className="text-base font-bold text-gray-700">Waiting for Rider</h4>
-                <p className="text-xs text-gray-500 max-w-xs mt-1">
+              <div className="w-full h-[300px] bg-slate-100 dark:bg-slate-950 flex flex-col items-center justify-center p-6 text-center transition-colors duration-200">
+                <MapPin className="w-10 h-10 text-slate-400 dark:text-slate-600 animate-bounce mb-3" />
+                <h4 className="text-base font-bold text-slate-700 dark:text-slate-300">Waiting for Rider</h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mt-1">
                   The rider has received your link but hasn't activated their GPS sharing yet. Keep this window open, it will connect automatically.
                 </p>
               </div>
             )}
 
             {/* SSE Live Connection state pill */}
-            <div className="absolute bottom-4 left-4 z-20 bg-black/85 text-white backdrop-blur text-[11px] font-medium px-3 py-1.5 rounded-full flex items-center gap-2">
+            <div className="absolute bottom-4 left-4 z-20 bg-slate-950/90 text-white backdrop-blur text-[11px] font-medium px-3 py-1.5 rounded-full flex items-center gap-2 border border-slate-800">
               <span className={`w-1.5 h-1.5 rounded-full ${
                 connectionState === "live" ? "bg-emerald-400 animate-pulse" :
                 connectionState === "connecting" ? "bg-amber-400 animate-ping" : "bg-rose-400"
@@ -434,7 +434,7 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
           <div className="p-6 space-y-6">
             {/* Estimated Arrival Card */}
             {location && destinationCoords && distanceMeters !== null && etaMinutes !== null && (
-              <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-100 space-y-4">
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-100/10 dark:shadow-none space-y-4">
                 <div className="flex justify-between items-start">
                   <div>
                     <span className="text-[10px] font-bold tracking-wider uppercase opacity-85 bg-white/20 px-2.5 py-0.5 rounded-full">
@@ -479,12 +479,12 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
             )}
 
             {/* Live details info card */}
-            <div className="flex gap-4 p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100/60 font-sans">
-              <Clock className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+            <div className="flex gap-4 p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/60 dark:border-indigo-900/30 font-sans transition-colors duration-200">
+              <Clock className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
               <div>
-                <h4 className="text-sm font-bold text-indigo-950">Rider Position</h4>
-                <p className="text-xs text-indigo-700/80 mt-1 font-medium flex items-center gap-1.5">
-                  <Signal className="w-3 h-3 text-indigo-500" />
+                <h4 className="text-sm font-bold text-indigo-950 dark:text-indigo-200">Rider Position</h4>
+                <p className="text-xs text-indigo-700/80 dark:text-indigo-300 mt-1 font-medium flex items-center gap-1.5">
+                  <Signal className="w-3 h-3 text-indigo-500 dark:text-indigo-400" />
                   {formatLastUpdated()}
                 </p>
               </div>
@@ -492,11 +492,11 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
 
             {/* Offline warning if connection drops */}
             {secondsSinceUpdate !== null && secondsSinceUpdate > 60 && (
-              <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3 items-start">
-                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40 rounded-2xl flex gap-3 items-start transition-colors duration-200">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                 <div>
-                  <h5 className="text-sm font-bold text-amber-900">Rider Connection Idle</h5>
-                  <p className="text-xs text-amber-700 mt-1">
+                  <h5 className="text-sm font-bold text-amber-900 dark:text-amber-200">Rider Connection Idle</h5>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
                     No GPS signal received from the rider for over a minute. They might have locked their phone or have poor reception. We are still monitoring and displaying their last known location!
                   </p>
                 </div>
@@ -504,11 +504,11 @@ export default function CustomerViewer({ token, onGoBack }: CustomerViewerProps)
             )}
 
             {/* Main Action Button */}
-            <div className="border-t border-gray-100 pt-6">
-              <h4 className="text-sm font-bold text-gray-800 mb-3 text-center">Has your order arrived?</h4>
+            <div className="border-t border-slate-100 dark:border-slate-800/80 pt-6 transition-colors duration-200">
+              <h4 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-3 text-center">Has your order arrived?</h4>
               <button
                 onClick={handleMarkDelivered}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3.5 px-4 rounded-2xl transition duration-150 shadow-md shadow-emerald-100 flex items-center justify-center gap-2"
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3.5 px-4 rounded-2xl transition duration-150 shadow-md shadow-emerald-100/10 dark:shadow-none flex items-center justify-center gap-2"
               >
                 <CheckCircle className="w-5 h-5" />
                 Yes, Received
